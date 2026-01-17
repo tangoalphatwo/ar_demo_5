@@ -10,6 +10,8 @@ window.addEventListener('load', () => {
   const threeCanvas = document.getElementById('threeCanvas');
   const startBtn = document.getElementById('startBtn');
   const statusEl = document.getElementById('status');
+  const arControls = document.getElementById('arControls');
+  const worldZeroBtn = document.getElementById('worldZeroBtn');
   const debugToggle = document.getElementById('debugToggle');
   const debugInfo = document.getElementById('debugInfo');
 
@@ -48,6 +50,14 @@ window.addEventListener('load', () => {
       toastEl.setAttribute('aria-hidden', 'true');
       toastTimer = setTimeout(() => { toastEl.hidden = true; toastTimer = null; }, 180);
     }, duration);
+  }
+
+  // Placeholder: World Zero button (logic to be added later)
+  if (worldZeroBtn) {
+    worldZeroBtn.addEventListener('click', () => {
+      console.log('World Zero clicked (placeholder)');
+      showToast('World Zero (coming soon)');
+    });
   }
 
   let running = false;
@@ -145,7 +155,13 @@ window.addEventListener('load', () => {
     running = true;
     loop(); // START THE FRAME LOOP
 
-    // Reveal the debug controls only after entering the AR experience
+    // Reveal the AR controls only after entering the AR experience
+    if (arControls) {
+      arControls.hidden = false;
+    }
+    if (worldZeroBtn) {
+      worldZeroBtn.hidden = false;
+    }
     if (debugToggle) {
       debugToggle.hidden = false;
       debugToggle.setAttribute('aria-pressed', 'false');
