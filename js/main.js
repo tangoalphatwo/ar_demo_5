@@ -21,6 +21,15 @@ window.addEventListener('load', () => {
   let debugFeaturePoints = [];
   let showDebug = false;
   let latestPose = null;
+  let worldZeroPose = null;
+
+  // Restore previously saved World Zero pose (if any)
+  try {
+    const stored = localStorage.getItem('worldZeroPose');
+    if (stored) worldZeroPose = JSON.parse(stored);
+  } catch (e) {
+    console.warn('Failed to restore worldZeroPose:', e);
+  }
 
   // Wire up debug toggle UI
 
@@ -55,12 +64,36 @@ window.addEventListener('load', () => {
   // Placeholder: World Zero button (logic to be added later)
   if (worldZeroBtn) {
     worldZeroBtn.addEventListener('click', () => {
-      console.log('World Zero clicked (placeholder)');
-      showToast('World Zero (coming soon)');
+      if (!running) {
+        showToast('Start AR first');
+        return;
+      }
+      if (!latestPose) {
+        showToast('Pose not ready yet');
+        return;
+      }
+
+      worldZeroPose = {
+        capturedAt: Date.now(),
+        position: { ...latestPose.position },
+        rotation: { ...latestPose.rotation }
+      };
+
+      try {
+        localStorage.setItem('worldZeroPose', JSON.stringify(worldZeroPose));
+      } catch (e) {
+        console.warn('Failed to persist worldZeroPose:', e);
+      }
+
+      // Expose for debugging / later wiring
+      window.worldZeroPose = worldZeroPose;
+      console.log('Saved worldZeroPose:', worldZeroPose);
+      showToast('World Zero saved');
     });
   }
 
   let running = false;
+  let starting = false;
   let slam = null;
 
   let cvReady = false;
@@ -109,76 +142,112 @@ window.addEventListener('load', () => {
     throw new Error("OpenCV not found");
   }
 
-  startBtn.addEventListener("click", async () => {
-    if (running) return; // prevent double-starts
+  async function startAR() {
+    if (running || starting) return; // prevent double-starts
+    starting = true;
 
-    statusEl.textContent = "Starting camera...";
-    await camera.start();
-
-    await videoEl.play();
-
-    const videoW = videoEl.videoWidth;
-    const videoH = videoEl.videoHeight;
-
-    // Fit the canvas to the viewport while preserving the video's aspect ratio
-    const maxW = window.innerWidth;
-    const maxH = window.innerHeight;
-    const scale = Math.min(maxW / videoW, maxH / videoH, 1); // don't upscale beyond native
-    const displayW = Math.round(videoW * scale);
-    const displayH = Math.round(videoH * scale);
-
-    const dpr = window.devicePixelRatio || 1;
-
-    // Backing buffer uses device pixels; CSS size uses CSS pixels
-    cvCanvas.width = Math.round(displayW * dpr);
-    cvCanvas.height = Math.round(displayH * dpr);
-    cvCanvas.style.width = `${displayW}px`;
-    cvCanvas.style.height = `${displayH}px`;
-
-    // Ensure 2D context maps CSS pixels correctly onto the backing buffer
-    const cvCtx = cvCanvas.getContext('2d');
-    cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    cvInstance = await initOpenCV();
-
-    // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately
     try {
-      if (videoMetadataPending || videoEl.readyState >= 1) {
-        initPose(videoEl, cvInstance);
+      if (statusEl) statusEl.textContent = "Starting camera...";
+      await camera.start();
+
+      // Some browsers require play() to be user-initiated; ignore failures here.
+      try {
+        await videoEl.play();
+      } catch (e) {
+        console.warn('videoEl.play() failed (may require user gesture):', e);
       }
-    } catch (e) {
-      console.warn('initPose failed (OpenCV may not be ready):', e);
-    }
 
-    slam = new SlamCore(cvInstance);
+      const videoW = videoEl.videoWidth;
+      const videoH = videoEl.videoHeight;
 
-    running = true;
-    loop(); // START THE FRAME LOOP
+      // Fit the canvas to the viewport while preserving the video's aspect ratio
+      const maxW = window.innerWidth;
+      const maxH = window.innerHeight;
+      const scale = Math.min(maxW / videoW, maxH / videoH, 1); // don't upscale beyond native
+      const displayW = Math.round(videoW * scale);
+      const displayH = Math.round(videoH * scale);
 
-    // Reveal the AR controls only after entering the AR experience
-    if (arControls) {
-      arControls.hidden = false;
-    }
-    if (worldZeroBtn) {
-      worldZeroBtn.hidden = false;
-    }
-    if (debugToggle) {
-      debugToggle.hidden = false;
-      debugToggle.setAttribute('aria-pressed', 'false');
-      debugToggle.textContent = 'Show Debug';
-    }
-    if (debugInfo) {
-      debugInfo.hidden = true;
-      debugInfo.setAttribute('aria-hidden', 'true');
-    }
+      const dpr = window.devicePixelRatio || 1;
 
-    // Hide the Start button after AR begins to avoid accidental re-starts
-    if (startBtn) {
-      startBtn.hidden = true;
-    }
+      // Backing buffer uses device pixels; CSS size uses CSS pixels
+      cvCanvas.width = Math.round(displayW * dpr);
+      cvCanvas.height = Math.round(displayH * dpr);
+      cvCanvas.style.width = `${displayW}px`;
+      cvCanvas.style.height = `${displayH}px`;
 
-    // (toast helper moved to outer scope)
-  });
+      // Ensure 2D context maps CSS pixels correctly onto the backing buffer
+      const cvCtx = cvCanvas.getContext('2d');
+      cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      cvInstance = await initOpenCV();
+
+      // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately
+      try {
+        if (videoMetadataPending || videoEl.readyState >= 1) {
+          initPose(videoEl, cvInstance);
+        }
+      } catch (e) {
+        console.warn('initPose failed (OpenCV may not be ready):', e);
+      }
+
+      slam = new SlamCore(cvInstance);
+
+      running = true;
+      if (statusEl) statusEl.textContent = "Running";
+      loop(); // START THE FRAME LOOP
+
+      // Reveal the AR controls only after entering the AR experience
+      if (arControls) {
+        arControls.hidden = false;
+      }
+      if (worldZeroBtn) {
+        worldZeroBtn.hidden = false;
+      }
+      if (debugToggle) {
+        debugToggle.hidden = false;
+        debugToggle.setAttribute('aria-pressed', 'false');
+        debugToggle.textContent = 'Show Debug';
+      }
+      if (debugInfo) {
+        debugInfo.hidden = true;
+        debugInfo.setAttribute('aria-hidden', 'true');
+      }
+
+      // Keep Start hidden once AR begins
+      if (startBtn) {
+        startBtn.hidden = true;
+      }
+    } catch (err) {
+      console.warn('Failed to start AR:', err);
+
+      // If auto-start is blocked (common on iOS Safari), reveal the Start button as a fallback.
+      if (startBtn) {
+        startBtn.hidden = false;
+      }
+
+      if (statusEl) {
+        const name = err && typeof err === 'object' && 'name' in err ? String(err.name) : '';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          statusEl.textContent = 'Camera permission required';
+        } else {
+          statusEl.textContent = 'Failed to start camera';
+        }
+      }
+    } finally {
+      starting = false;
+    }
+  }
+
+  if (startBtn) {
+    // Default: no landing page; keep this hidden unless auto-start fails.
+    startBtn.hidden = true;
+    startBtn.addEventListener('click', () => {
+      void startAR();
+    });
+  }
+
+  // Auto-start AR as soon as the page loads.
+  void startAR();
 
   function drawFeatures(points) {
     if (!points || points.length === 0) return;
