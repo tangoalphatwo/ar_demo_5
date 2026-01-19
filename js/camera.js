@@ -24,10 +24,15 @@ export class CameraManager {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     this.video.srcObject = stream;
 
+    // Try to start playback immediately while user activation is still fresh.
+    // Ignore failures; main.js also attempts a best-effort play().
+    try {
+      const p = this.video.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (_) {}
+
     return new Promise(resolve => {
       this.video.onloadedmetadata = () => {
-        this.video.play();
-
         const w = this.video.videoWidth;
         const h = this.video.videoHeight;
 
