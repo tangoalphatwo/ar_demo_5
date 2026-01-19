@@ -6,6 +6,20 @@ html, body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+#startOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#startOverlay[hidden] {
+  display: none;
+}
+
 #camera {
   display: none;
 }

@@ -27,6 +27,11 @@
 
 </head>
 <body>
+  <!-- Fullscreen landing overlay; hidden after starting AR -->
+  <div id="startOverlay">
+    <button id="startBtn" type="button">Start AR</button>
+  </div>
+
   <!-- Hidden video for camera feed -->
   <video id="camera" autoplay playsinline muted></video>
 
@@ -37,7 +42,6 @@
   <canvas id="threeCanvas"></canvas>
 
   <div id="ui">
-    <button id="startBtn" hidden>Start AR</button>
     <div id="arControls" hidden>
       <button id="worldZeroBtn" type="button" hidden>World Zero</button>
       <button id="debugToggle" type="button" aria-pressed="false" hidden>Show Debug</button>

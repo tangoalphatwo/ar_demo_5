@@ -9,6 +9,7 @@ window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
   const cvCanvas = document.getElementById('cvCanvas');
   const threeCanvas = document.getElementById('threeCanvas');
+  const startOverlay = document.getElementById('startOverlay');
   const startBtn = document.getElementById('startBtn');
   const statusEl = document.getElementById('status');
   const arControls = document.getElementById('arControls');
@@ -239,6 +240,12 @@ window.addEventListener('load', () => {
       if (statusEl) statusEl.textContent = "Running";
       loop(); // START THE FRAME LOOP
 
+      // Hide landing overlay once AR is running.
+      if (startOverlay) {
+        startOverlay.hidden = true;
+        startOverlay.setAttribute('aria-hidden', 'true');
+      }
+
       // Reveal the AR controls only after entering the AR experience
       if (arControls) {
         arControls.hidden = false;
@@ -256,16 +263,13 @@ window.addEventListener('load', () => {
         debugInfo.setAttribute('aria-hidden', 'true');
       }
 
-      // Keep Start hidden once AR begins
-      if (startBtn) {
-        startBtn.hidden = true;
-      }
     } catch (err) {
       console.warn('Failed to start AR:', err);
 
-      // If auto-start is blocked (common on iOS Safari), reveal the Start button as a fallback.
-      if (startBtn) {
-        startBtn.hidden = false;
+      // Keep (or re-show) the landing overlay so the user can retry.
+      if (startOverlay) {
+        startOverlay.hidden = false;
+        startOverlay.setAttribute('aria-hidden', 'false');
       }
 
       if (statusEl) {
@@ -282,15 +286,21 @@ window.addEventListener('load', () => {
   }
 
   if (startBtn) {
-    // Default: no landing page; keep this hidden unless auto-start fails.
-    startBtn.hidden = true;
     startBtn.addEventListener('click', () => {
+      // Hide immediately for perceived responsiveness; startAR() will re-show on failure.
+      if (startOverlay) {
+        startOverlay.hidden = true;
+        startOverlay.setAttribute('aria-hidden', 'true');
+      }
       void startAR();
     });
   }
 
-  // Auto-start AR as soon as the page loads.
-  void startAR();
+  // Default state: show landing overlay and wait for user gesture.
+  if (startOverlay) {
+    startOverlay.hidden = false;
+    startOverlay.setAttribute('aria-hidden', 'false');
+  }
 
   function drawFeatures(points) {
     if (!points || points.length === 0) return;
