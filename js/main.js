@@ -3,6 +3,7 @@ import { CameraManager } from './camera.js';
 import { ARRenderer } from './renderer.js';
 import { SlamCore } from './slam_core.js';
 import { initPose, estimatePose } from "./pose.js";
+import { MarkerTracker } from './marker_tracker.js';
 
 window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
@@ -17,6 +18,12 @@ window.addEventListener('load', () => {
 
   const camera = new CameraManager(videoEl, cvCanvas);
   const renderer = new ARRenderer(threeCanvas);
+
+  const AVOCADO_GLB_URL = 'Avocado2.glb';
+
+  // Marker config
+  const MARKER_URL = 'marker/WorldZeroMarker.png';
+  const MARKER_SIZE_M = 0.1016; // 4 inches = 0.1016 meters
 
   let debugFeaturePoints = [];
   let showDebug = false;
@@ -95,6 +102,10 @@ window.addEventListener('load', () => {
   let running = false;
   let starting = false;
   let slam = null;
+
+  let markerTracker = null;
+  let worldAnchored = false;
+  let lastMarkerPose = null; // { Rcw: cv.Mat, tcw: cv.Mat }
 
   let cvReady = false;
   let cvInstance = null;
@@ -191,6 +202,28 @@ window.addEventListener('load', () => {
       }
 
       slam = new SlamCore(cvInstance);
+
+      // Initialize marker tracker (best-effort)
+      try {
+        markerTracker = new MarkerTracker(cvInstance, { markerUrl: MARKER_URL });
+        await markerTracker.init();
+        console.log('MarkerTracker ready');
+      } catch (e) {
+        console.warn('MarkerTracker failed to init:', e);
+        markerTracker = null;
+      }
+
+      // Load the avocado model (scaled inside renderer)
+      try {
+        await renderer.loadAvocado(AVOCADO_GLB_URL);
+        // Place it in front of the camera until we anchor it on the marker
+        renderer.anchor.position.set(0, 0, -0.5);
+        if (renderer.modelRoot) {
+          renderer.modelRoot.position.set(0, 0, 0);
+        }
+      } catch (e) {
+        console.warn('Failed to load avocado model:', e);
+      }
 
       running = true;
       if (statusEl) statusEl.textContent = "Running";
@@ -368,6 +401,56 @@ window.addEventListener('load', () => {
     const gray = new cv.Mat();
     cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
 
+    // Marker detection + initial anchoring
+    try {
+      if (markerTracker && markerTracker.ready) {
+        const det = markerTracker.detect(gray);
+        if (det && det.corners && det.corners.length === 4) {
+          // Convert corners (cvCanvas backing px) -> video px for solvePnP
+          const imgPts = [];
+          for (const c of det.corners) {
+            const v = camera.mapCanvasPointToVideo(c);
+            if (!v) break;
+            imgPts.push(v);
+          }
+
+          if (imgPts.length === 4) {
+            const pose = solvePnPMarkerPose(cv, videoEl.videoWidth, videoEl.videoHeight, imgPts, MARKER_SIZE_M);
+            if (pose) {
+              // Cache last good marker pose (for correction when visible)
+              if (lastMarkerPose) {
+                if (lastMarkerPose.Rcw) lastMarkerPose.Rcw.delete();
+                if (lastMarkerPose.tcw) lastMarkerPose.tcw.delete();
+              }
+              lastMarkerPose = pose;
+
+              if (!worldAnchored) {
+                worldAnchored = true;
+
+                // Set SLAM world pose to align with marker-origin world
+                if (slam) slam.setPose(pose.Rcw, pose.tcw);
+
+                // Place anchor at marker origin; lift avocado slightly above marker plane
+                renderer.anchor.position.set(0, 0, 0);
+                if (renderer.modelRoot) {
+                  renderer.modelRoot.position.set(0, 0, 0.02);
+                }
+                console.log('World anchored on marker');
+              } else {
+                // When marker is visible, re-correct the SLAM drift.
+                if (slam) slam.setPose(pose.Rcw, pose.tcw);
+              }
+            }
+          }
+
+          // homography mat is owned by det
+          if (det.homography && det.homography.delete) det.homography.delete();
+        }
+      }
+    } catch (e) {
+      console.warn('Marker detection error:', e);
+    }
+
     if (!prevGray || !prevPoints || prevPoints.rows === 0) {
       // FIRST FRAME (or fully lost): detect features
       prevGray = gray.clone();
@@ -525,7 +608,73 @@ window.addEventListener('load', () => {
       }
     }
 
+    // Update Three camera from SLAM pose (once anchored, this keeps content world-locked)
+    try {
+      if (slam && slam.pose && slam.pose.R && slam.pose.t) {
+        renderer.setCameraFromOpenCvPose(slam.pose.R, slam.pose.t);
+      }
+    } catch (e) {
+      console.warn('Failed to update Three camera pose:', e);
+    }
+
+    // Render Three.js on the WebGL canvas
+    renderer.render();
+
     requestAnimationFrame(loop); // KEEP GOING
+  }
+
+  function solvePnPMarkerPose(cv, videoW, videoH, imagePointsVideoPx, markerSizeM) {
+    // Build camera intrinsics similarly to initPose()
+    const focalLength = videoW;
+    const K = cv.matFromArray(3, 3, cv.CV_64F, [
+      focalLength, 0, videoW / 2,
+      0, focalLength, videoH / 2,
+      0, 0, 1
+    ]);
+
+    const dist = cv.Mat.zeros(4, 1, cv.CV_64F);
+
+    const s = markerSizeM;
+    const half = s / 2;
+
+    // World/object points in meters. Marker lies on z=0 plane.
+    // Order corresponds to corners: TL, TR, BR, BL.
+    const obj = cv.matFromArray(4, 3, cv.CV_64F, [
+      -half,  half, 0,
+       half,  half, 0,
+       half, -half, 0,
+      -half, -half, 0
+    ]);
+
+    const img = cv.matFromArray(4, 2, cv.CV_64F, [
+      imagePointsVideoPx[0].x, imagePointsVideoPx[0].y,
+      imagePointsVideoPx[1].x, imagePointsVideoPx[1].y,
+      imagePointsVideoPx[2].x, imagePointsVideoPx[2].y,
+      imagePointsVideoPx[3].x, imagePointsVideoPx[3].y
+    ]);
+
+    const rvec = new cv.Mat();
+    const tvec = new cv.Mat();
+
+    const ok = cv.solvePnP(obj, img, K, dist, rvec, tvec, false, cv.SOLVEPNP_ITERATIVE);
+
+    obj.delete();
+    img.delete();
+    K.delete();
+    dist.delete();
+
+    if (!ok) {
+      rvec.delete();
+      tvec.delete();
+      return null;
+    }
+
+    const R = new cv.Mat();
+    cv.Rodrigues(rvec, R);
+    rvec.delete();
+
+    // Return world->camera pose mats
+    return { Rcw: R, tcw: tvec };
   }
 
   window.addEventListener('resize', () => renderer.resize());

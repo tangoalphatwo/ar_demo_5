@@ -5,6 +5,9 @@ export class CameraManager {
     this.cvCanvas = cvCanvas;
     this.cvCtx = cvCanvas.getContext('2d');
     this.ready = false;
+
+    // Last draw rect (CSS px) used to draw the video into cvCanvas
+    this.lastDrawRect = null;
   }
 
   async start() {
@@ -63,7 +66,33 @@ export class CameraManager {
     // drawImage uses CSS pixels coordinates; context should already map CSS→backing
     this.cvCtx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
 
-    return { offsetX, offsetY, drawWidth, drawHeight };
+    const rect = { offsetX, offsetY, drawWidth, drawHeight };
+    this.lastDrawRect = rect;
+    return rect;
+  }
+
+  // Map a point measured in cvCanvas *backing pixels* (ImageData coords)
+  // into the original video pixel coordinates.
+  mapCanvasPointToVideo(p) {
+    if (!this.lastDrawRect) return null;
+
+    const dpr = this.cvCanvas.clientWidth ? (this.cvCanvas.width / this.cvCanvas.clientWidth) : 1;
+
+    const ox = this.lastDrawRect.offsetX * dpr;
+    const oy = this.lastDrawRect.offsetY * dpr;
+    const dw = this.lastDrawRect.drawWidth * dpr;
+    const dh = this.lastDrawRect.drawHeight * dpr;
+
+    const nx = (p.x - ox) / dw;
+    const ny = (p.y - oy) / dh;
+
+    if (!isFinite(nx) || !isFinite(ny)) return null;
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
+
+    return {
+      x: nx * this.video.videoWidth,
+      y: ny * this.video.videoHeight
+    };
   }
 
   grabFrame() {
