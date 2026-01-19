@@ -46,6 +46,9 @@ window.addEventListener('load', () => {
       showDebug = !showDebug;
       debugToggle.textContent = showDebug ? 'Hide Debug' : 'Show Debug';
       debugToggle.setAttribute('aria-pressed', String(showDebug));
+      if (cvCanvas) {
+        cvCanvas.style.opacity = showDebug ? '1' : '0';
+      }
       if (!debugInfo) return;
       debugInfo.hidden = !showDebug;
       debugInfo.setAttribute('aria-hidden', String(!showDebug));
