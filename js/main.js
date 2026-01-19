@@ -395,6 +395,13 @@ window.addEventListener('load', () => {
       if (slam) slam.processFrame(frame);
     } catch (err) {
       console.warn('SLAM processing error:', err);
+      // If OpenCV hits a fatal WASM error, stop looping to avoid locking up the page.
+      if (err && String(err).includes('Out of bounds memory access')) {
+        running = false;
+        showToast('OpenCV crashed; reload page');
+        if (statusEl) statusEl.textContent = 'OpenCV crashed';
+        return;
+      }
     }
 
     const rgba = cv.matFromImageData(frame);
@@ -534,36 +541,30 @@ window.addEventListener('load', () => {
       err.delete();
     }
 
-    // Try pose estimation when we have a viable 4-point set
-    try {
-      const rawImagePts = getDetectedPoints(); // in processing canvas coords
-      if (rawImagePts && cvInstance) {
-        // scale to the video coordinate space used by initPose (video.videoWidth/height)
-        const sx = videoEl.videoWidth / camera.cvCanvas.width;
-        const sy = videoEl.videoHeight / camera.cvCanvas.height;
-        const imagePtsScaled = rawImagePts.map(p => ({ x: p.x * sx, y: p.y * sy }));
+    // Disable the old placeholder solvePnP path when marker tracking is enabled.
+    // (It can crash on some OpenCV.js builds and is not used for anchoring.)
+    if (!markerTracker) {
+      try {
+        const rawImagePts = getDetectedPoints(); // in processing canvas coords
+        if (rawImagePts && cvInstance) {
+          // scale to the video coordinate space used by initPose (video.videoWidth/height)
+          const sx = videoEl.videoWidth / camera.cvCanvas.width;
+          const sy = videoEl.videoHeight / camera.cvCanvas.height;
+          const imagePtsScaled = rawImagePts.map(p => ({ x: p.x * sx, y: p.y * sy }));
 
-        const objectPoints = [
-          { x: -0.05, y: -0.05, z: 0 },
-          { x:  0.05, y: -0.05, z: 0 },
-          { x:  0.05, y:  0.05, z: 0 },
-          { x: -0.05, y:  0.05, z: 0 }
-        ];
+          const objectPoints = [
+            { x: -0.05, y: -0.05, z: 0 },
+            { x:  0.05, y: -0.05, z: 0 },
+            { x:  0.05, y:  0.05, z: 0 },
+            { x: -0.05, y:  0.05, z: 0 }
+          ];
 
-        const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
-        if (pose) {
-          // pose is now a smoothed poseState { position: {x,y,z}, rotation: {yaw,pitch,roll} }
-          latestPose = pose;
-          console.log('Position:', pose.position);
-          console.log('Yaw:', pose.rotation.yaw);
-        } else {
-          latestPose = null;
+          const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
+          latestPose = pose || null;
         }
-
-        // pose estimate only
+      } catch (e) {
+        console.warn('Pose estimation error:', e);
       }
-    } catch (e) {
-      console.warn('Pose estimation error:', e);
     }
 
     rgba.delete();

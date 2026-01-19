@@ -16,6 +16,8 @@ export class SlamCore {
         this.currGray = null;
         this.prevGray = null;
         this.prevPoints = null;
+
+        this._warnedMissingPoseFns = false;
     }
 
     resetPose() {
@@ -48,15 +50,17 @@ export class SlamCore {
     _composePose(Rrel, trel) {
         const cv = this.cv;
 
+        const empty = new cv.Mat();
+
         // World->Cam update given relative motion prevCam->currCam:
         // Xc = Rrel * Xp + trel
         // Xp = Rcw_old * Xw + tcw_old
         // => Xc = (Rrel*Rcw_old) Xw + (Rrel*tcw_old + trel)
         const Rnew = new cv.Mat();
-        cv.gemm(Rrel, this.pose.R, 1, new cv.Mat(), 0, Rnew);
+        cv.gemm(Rrel, this.pose.R, 1, empty, 0, Rnew);
 
         const tRot = new cv.Mat();
-        cv.gemm(Rrel, this.pose.t, 1, new cv.Mat(), 0, tRot);
+        cv.gemm(Rrel, this.pose.t, 1, empty, 0, tRot);
 
         const tnew = new cv.Mat();
         cv.add(tRot, trel, tnew);
@@ -68,6 +72,7 @@ export class SlamCore {
         this.pose.t = tnew;
 
         tRot.delete();
+        empty.delete();
     }
 
     _ensureMats(width, height) {
@@ -150,9 +155,32 @@ export class SlamCore {
 
         const mask = new cv.Mat();
         let E = null;
-        if (cv.findEssentialMat) {
+        const hasEssential = typeof cv.findEssentialMat === 'function';
+        const hasFundamental = typeof cv.findFundamentalMat === 'function';
+        const hasRecoverPose = typeof cv.recoverPose === 'function';
+
+        if (!hasEssential && !hasFundamental) {
+            if (!this._warnedMissingPoseFns) {
+                console.warn('OpenCV build missing findEssentialMat/findFundamentalMat; SLAM pose update disabled');
+                this._warnedMissingPoseFns = true;
+            }
+
+            // Keep tracking features but do not update pose.
+            this.prevGray = this.currGray.clone();
+            this.prevPoints = currMat.clone();
+
+            // cleanup locals
+            if (mask && mask.delete) mask.delete();
+            if (prevMat && prevMat.delete) prevMat.delete();
+            if (currMat && currMat.delete) currMat.delete();
+            if (K && K.delete) K.delete();
+
+            return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D };
+        }
+
+        if (hasEssential) {
             E = cv.findEssentialMat(currMat, prevMat, K, cv.RANSAC, 0.999, 1.0, mask);
-        } else if (cv.findFundamentalMat) {
+        } else if (hasFundamental) {
             // Fallback: compute Fundamental matrix then convert to Essential: E = K^T * F * K
             const F = cv.findFundamentalMat(currMat, prevMat, cv.FM_RANSAC, 3, 0.99, mask);
             try {
@@ -179,6 +207,27 @@ export class SlamCore {
 
         if (E) {
             try {
+                if (!hasRecoverPose) {
+                    if (!this._warnedMissingPoseFns) {
+                        console.warn('OpenCV build missing recoverPose; SLAM pose update disabled');
+                        this._warnedMissingPoseFns = true;
+                    }
+
+                    this.prevGray = this.currGray.clone();
+                    this.prevPoints = currMat.clone();
+
+                    // cleanup locals
+                    if (E && E.delete) E.delete();
+                    if (mask && mask.delete) mask.delete();
+                    if (prevMat && prevMat.delete) prevMat.delete();
+                    if (currMat && currMat.delete) currMat.delete();
+                    if (K && K.delete) K.delete();
+                    if (R && R.delete) R.delete();
+                    if (t && t.delete) t.delete();
+
+                    return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D };
+                }
+
                 cv.recoverPose(E, currMat, prevMat, K, R, t, mask);
 
                 // Proper pose composition (matrix multiply + rotated translation)
