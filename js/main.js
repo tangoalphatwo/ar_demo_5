@@ -143,14 +143,24 @@ window.addEventListener('load', () => {
       console.log("OpenCV ready (awaited Promise)");
       return cvInstance;
     }
-  
-    // Fallback (non-modularized build)
-    if (window.cv && window.cv.Mat) {
-      console.log("OpenCV ready (non-modularized)");
-      return window.cv;
+
+    // Non-modularized builds: wait for runtime init + API exposure
+    const start = Date.now();
+    const timeoutMs = 15000;
+    while (Date.now() - start < timeoutMs) {
+      if (window.__opencvReady && window.cv && window.cv.Mat) {
+        console.log("OpenCV ready (onRuntimeInitialized)");
+        return window.cv;
+      }
+      if (window.cv && window.cv.Mat) {
+        // Some builds don't use the __opencvReady flag.
+        console.log("OpenCV ready (cv.Mat available)");
+        return window.cv;
+      }
+      await new Promise(r => setTimeout(r, 50));
     }
-  
-    throw new Error("OpenCV not found");
+
+    throw new Error("OpenCV not ready (timed out)");
   }
 
   async function startAR() {
