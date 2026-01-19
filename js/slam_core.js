@@ -18,6 +18,58 @@ export class SlamCore {
         this.prevPoints = null;
     }
 
+    resetPose() {
+        const cv = this.cv;
+        if (this.pose?.R && this.pose.R.delete) this.pose.R.delete();
+        if (this.pose?.t && this.pose.t.delete) this.pose.t.delete();
+        this.pose = {
+            R: cv.Mat.eye(3, 3, cv.CV_64F),
+            t: cv.Mat.zeros(3, 1, cv.CV_64F)
+        };
+    }
+
+    // Sets the SLAM world so that pose matches a known world->camera transform.
+    // Rcw: 3x3 CV_64F, tcw: 3x1 CV_64F
+    setPose(Rcw, tcw) {
+        const cv = this.cv;
+        if (!Rcw || !tcw) throw new Error('setPose: Rcw and tcw are required');
+
+        // Clone to own the memory.
+        const nextR = new cv.Mat();
+        const nextT = new cv.Mat();
+        Rcw.copyTo(nextR);
+        tcw.copyTo(nextT);
+
+        if (this.pose?.R && this.pose.R.delete) this.pose.R.delete();
+        if (this.pose?.t && this.pose.t.delete) this.pose.t.delete();
+        this.pose = { R: nextR, t: nextT };
+    }
+
+    _composePose(Rrel, trel) {
+        const cv = this.cv;
+
+        // World->Cam update given relative motion prevCam->currCam:
+        // Xc = Rrel * Xp + trel
+        // Xp = Rcw_old * Xw + tcw_old
+        // => Xc = (Rrel*Rcw_old) Xw + (Rrel*tcw_old + trel)
+        const Rnew = new cv.Mat();
+        cv.gemm(Rrel, this.pose.R, 1, new cv.Mat(), 0, Rnew);
+
+        const tRot = new cv.Mat();
+        cv.gemm(Rrel, this.pose.t, 1, new cv.Mat(), 0, tRot);
+
+        const tnew = new cv.Mat();
+        cv.add(tRot, trel, tnew);
+
+        if (this.pose.R && this.pose.R.delete) this.pose.R.delete();
+        if (this.pose.t && this.pose.t.delete) this.pose.t.delete();
+
+        this.pose.R = Rnew;
+        this.pose.t = tnew;
+
+        tRot.delete();
+    }
+
     _ensureMats(width, height) {
         if (!this.gray) {
             this.gray = new this.cv.Mat(height, width, this.cv.CV_8UC1);
@@ -129,8 +181,8 @@ export class SlamCore {
             try {
                 cv.recoverPose(E, currMat, prevMat, K, R, t, mask);
 
-                this.pose.R = R.mul(this.pose.R);
-                this.pose.t = this._addTrans(this.pose.t, t);
+                // Proper pose composition (matrix multiply + rotated translation)
+                this._composePose(R, t);
 
                 // Triangulate matched points into 3D (camera1 coordinate system)
                 this.mapPoints3D = [];
@@ -222,6 +274,12 @@ export class SlamCore {
 
         if (mask && mask.delete) mask.delete();
         if (prevMat && prevMat.delete) prevMat.delete();
+
+        // cleanup locals
+        if (currMat && currMat.delete) currMat.delete();
+        if (K && K.delete) K.delete();
+        if (R && R.delete) R.delete();
+        if (t && t.delete) t.delete();
 
         return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D };
     }
