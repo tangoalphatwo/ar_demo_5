@@ -161,7 +161,7 @@ window.addEventListener('load', () => {
       const gltf = await renderer.loadGLB('model/Avocado2.glb');
       renderer.model = gltf.scene;
       renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
-      renderer.model.scale.setScalar(0.25);
+      renderer.model.scale.setScalar(0.01);
       renderer.anchor.add(renderer.model);
       avocadoLoaded = true;
       showToast('Avocado loaded');
