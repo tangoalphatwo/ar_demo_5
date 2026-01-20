@@ -3,6 +3,7 @@ import { CameraManager } from './camera.js';
 import { ARRenderer } from './renderer.js';
 import { SlamCore } from './slam_core.js';
 import { initPose, estimatePose } from "./pose.js";
+import { MarkerTracker } from './marker_tracker.js';
 
 window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
@@ -52,6 +53,9 @@ window.addEventListener('load', () => {
 
   let running = false;
   let slam = null;
+
+  let markerTracker = null;
+  let avocadoLoaded = false;
 
   let cvReady = false;
   let cvInstance = null;
@@ -141,6 +145,30 @@ window.addEventListener('load', () => {
     }
 
     slam = new SlamCore(cvInstance);
+
+    // Initialize marker tracker + load template
+    try {
+      markerTracker = new MarkerTracker(cvInstance);
+      await markerTracker.loadTemplate('marker/WorldZeroMarker.png');
+      showToast('Marker template loaded');
+    } catch (e) {
+      console.warn('MarkerTracker init failed:', e);
+      showToast('Marker tracker unavailable');
+    }
+
+    // Load Avocado model (once)
+    try {
+      const gltf = await renderer.loadGLB('model/Avocado2.glb');
+      renderer.model = gltf.scene;
+      renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
+      renderer.model.scale.setScalar(0.25);
+      renderer.anchor.add(renderer.model);
+      avocadoLoaded = true;
+      showToast('Avocado loaded');
+    } catch (e) {
+      console.warn('Failed to load Avocado2.glb:', e);
+      showToast('Failed to load model');
+    }
 
     running = true;
     loop(); // START THE FRAME LOOP
@@ -283,6 +311,41 @@ window.addEventListener('load', () => {
     const gray = new cv.Mat();
     cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
 
+    // --- Marker-based pose (WorldZeroMarker.png, 4" x 4") ---
+    try {
+      if (markerTracker) {
+        const det = markerTracker.detect(gray);
+        if (det && det.corners && det.corners.length === 4) {
+          // Scale from processing canvas coords to raw video coords (initPose uses video dimensions)
+          const sx = videoEl.videoWidth / camera.cvCanvas.width;
+          const sy = videoEl.videoHeight / camera.cvCanvas.height;
+          const imagePtsScaled = det.corners.map(p => ({ x: p.x * sx, y: p.y * sy }));
+
+          const half = 0.1016 / 2; // 4 inches in meters
+          const objectPoints = [
+            { x: -half, y: -half, z: 0 },
+            { x:  half, y: -half, z: 0 },
+            { x:  half, y:  half, z: 0 },
+            { x: -half, y:  half, z: 0 }
+          ];
+
+          const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
+          if (pose) {
+            latestPose = pose;
+            renderer.setAnchorPose(pose);
+          }
+
+          // cleanup homography mat
+          det.homography?.delete?.();
+        } else {
+          // no marker in this frame
+          renderer.setAnchorPose(null);
+        }
+      }
+    } catch (e) {
+      console.warn('Marker pose error:', e);
+    }
+
     if (!prevGray || !prevPoints || prevPoints.rows === 0) {
       // FIRST FRAME (or fully lost): detect features
       prevGray = gray.clone();
@@ -368,8 +431,10 @@ window.addEventListener('load', () => {
 
     // Try pose estimation when we have a viable 4-point set
     try {
-      const rawImagePts = getDetectedPoints(); // in processing canvas coords
-      if (rawImagePts && cvInstance) {
+      // Keep the previous feature-based heuristic only as a fallback if the marker tracker is not active.
+      if (!markerTracker) {
+        const rawImagePts = getDetectedPoints(); // in processing canvas coords
+        if (!rawImagePts || !cvInstance) return;
         // scale to the video coordinate space used by initPose (video.videoWidth/height)
         const sx = videoEl.videoWidth / camera.cvCanvas.width;
         const sy = videoEl.videoHeight / camera.cvCanvas.height;
@@ -391,8 +456,6 @@ window.addEventListener('load', () => {
         } else {
           latestPose = null;
         }
-
-        // pose estimate only
       }
     } catch (e) {
       console.warn('Pose estimation error:', e);
@@ -438,6 +501,13 @@ window.addEventListener('load', () => {
         debugInfo.hidden = true;
         debugInfo.setAttribute('aria-hidden', 'true');
       }
+    }
+
+    // Render Three.js overlay
+    try {
+      renderer.render();
+    } catch (e) {
+      // ignore transient GL init errors
     }
 
     requestAnimationFrame(loop); // KEEP GOING
