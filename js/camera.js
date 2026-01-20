@@ -5,6 +5,9 @@ export class CameraManager {
     this.cvCanvas = cvCanvas;
     this.cvCtx = cvCanvas.getContext('2d');
     this.ready = false;
+
+    this.lastDrawRect = null;
+    this.lastDpr = 1;
   }
 
   async start() {
@@ -71,7 +74,19 @@ export class CameraManager {
 
     const w = this.cvCanvas.width;
     const h = this.cvCanvas.height;
-    this.drawVideoPreserveAspect(this.video, this.cvCanvas);
-    return this.cvCtx.getImageData(0, 0, w, h);
+
+    // drawRect is in CSS pixels
+    const drawRect = this.drawVideoPreserveAspect(this.video, this.cvCanvas);
+    this.lastDrawRect = drawRect;
+
+    // Backing buffer pixels per CSS pixel
+    const cssW = this.cvCanvas.clientWidth || 1;
+    this.lastDpr = w / cssW;
+
+    return {
+      imageData: this.cvCtx.getImageData(0, 0, w, h),
+      drawRect,
+      dpr: this.lastDpr
+    };
   }
 }

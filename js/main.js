@@ -310,10 +310,32 @@ window.addEventListener('load', () => {
     if (!running || !cvInstance) return;
 
     const cv = cvInstance;
-    const frame = camera.grabFrame();
-    if (!frame) {
+    const grabbed = camera.grabFrame();
+    if (!grabbed || !grabbed.imageData) {
       requestAnimationFrame(loop);
       return;
+    }
+    const frame = grabbed.imageData;
+    const drawRectForFrame = grabbed.drawRect;
+    const frameDpr = grabbed.dpr || 1;
+
+    function procPointToVideo(p) {
+      // p is in backing-buffer pixels (ImageData space). drawRect is in CSS pixels.
+      if (!drawRectForFrame) return { x: p.x, y: p.y };
+
+      const xCss = p.x / frameDpr;
+      const yCss = p.y / frameDpr;
+
+      const xInVideoCss = xCss - drawRectForFrame.offsetX;
+      const yInVideoCss = yCss - drawRectForFrame.offsetY;
+
+      const u = xInVideoCss / drawRectForFrame.drawWidth;
+      const v = yInVideoCss / drawRectForFrame.drawHeight;
+
+      return {
+        x: u * videoEl.videoWidth,
+        y: v * videoEl.videoHeight
+      };
     }
 
     // Feed the raw frame to the SLAM core
@@ -391,10 +413,8 @@ window.addEventListener('load', () => {
         }
 
         if (cornersProc) {
-          // Scale from processing canvas coords to raw video coords (initPose uses video dimensions)
-          const sx = videoEl.videoWidth / camera.cvCanvas.width;
-          const sy = videoEl.videoHeight / camera.cvCanvas.height;
-          const imagePtsScaled = cornersProc.map(p => ({ x: p.x * sx, y: p.y * sy }));
+          // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
+          const imagePtsScaled = cornersProc.map(procPointToVideo);
 
           const half = 0.1016 / 2; // 4 inches in meters
           const objectPoints = [
