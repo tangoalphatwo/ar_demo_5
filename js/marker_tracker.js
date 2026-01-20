@@ -123,7 +123,7 @@ export class MarkerTracker {
     for (let i = 0; i < matches.size(); i++) {
       const m = matches.get(i);
       if (m.size() < 2) {
-        m.delete();
+        m.delete?.();
         continue;
       }
       const m0 = m.get(0);
@@ -131,15 +131,15 @@ export class MarkerTracker {
       if (m0.distance < ratio * m1.distance) {
         good.push(m0);
       } else {
-        m0.delete();
+        m0.delete?.();
       }
-      m1.delete();
-      m.delete();
+      m1.delete?.();
+      m.delete?.();
     }
-    matches.delete();
+    matches.delete?.();
 
     if (good.length < 12) {
-      for (const gm of good) gm.delete();
+      for (const gm of good) gm.delete?.();
       frameKeypoints.delete();
       frameDescriptors.delete();
       return null;
@@ -159,7 +159,7 @@ export class MarkerTracker {
       src.push(kpTpl.x, kpTpl.y);
       dst.push(kpFrame.x, kpFrame.y);
 
-      m.delete();
+      m.delete?.();
     }
 
     const srcMat = cv.matFromArray(src.length / 2, 1, cv.CV_32FC2, src);

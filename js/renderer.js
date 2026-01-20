@@ -1,4 +1,7 @@
 // renderer.js
+import * as THREE from 'https://esm.sh/three@0.160.0';
+import { GLTFLoader } from 'https://esm.sh/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+
 export class ARRenderer {
   constructor(canvasEl) {
     this.canvas = canvasEl;
@@ -54,11 +57,7 @@ export class ARRenderer {
   }
 
   async loadGLB(url) {
-    if (!THREE.GLTFLoader) {
-      throw new Error('THREE.GLTFLoader not available (did the script tag load?)');
-    }
-
-    const loader = new THREE.GLTFLoader();
+    const loader = new GLTFLoader();
     return new Promise((resolve, reject) => {
       loader.load(
         url,
