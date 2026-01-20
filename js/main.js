@@ -57,6 +57,22 @@ window.addEventListener('load', () => {
   let markerTracker = null;
   let avocadoLoaded = false;
 
+  // Marker corner tracking for stability
+  let markerTracking = false;
+  let markerPrevGray = null;
+  let markerPrevPts = null; // cv.Mat 4x1 CV_32FC2
+  let lastStableMarkerPose = null;
+
+  function poseJumpTooLarge(prev, next) {
+    if (!prev || !next) return false;
+    const dx = next.position.x - prev.position.x;
+    const dy = next.position.y - prev.position.y;
+    const dz = next.position.z - prev.position.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    // reject very large sudden jumps (usually due to a bad homography / corner mixup)
+    return dist > 0.25;
+  }
+
   let cvReady = false;
   let cvInstance = null;
 
@@ -314,12 +330,71 @@ window.addEventListener('load', () => {
     // --- Marker-based pose (WorldZeroMarker.png, 4" x 4") ---
     try {
       if (markerTracker) {
-        const det = markerTracker.detect(gray);
-        if (det && det.corners && det.corners.length === 4) {
+        let cornersProc = null; // in processing canvas/backing coords
+
+        if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
+          const currPts = new cv.Mat();
+          const status = new cv.Mat();
+          const err = new cv.Mat();
+          cv.calcOpticalFlowPyrLK(markerPrevGray, gray, markerPrevPts, currPts, status, err);
+
+          let ok = status.rows === 4;
+          if (ok) {
+            for (let i = 0; i < 4; i++) {
+              if (status.data[i] !== 1) { ok = false; break; }
+            }
+          }
+
+          if (ok) {
+            cornersProc = [];
+            for (let i = 0; i < 4; i++) {
+              cornersProc.push({ x: currPts.data32F[i * 2], y: currPts.data32F[i * 2 + 1] });
+            }
+
+            markerPrevGray.delete();
+            markerPrevGray = gray.clone();
+            markerPrevPts.delete();
+            markerPrevPts = currPts;
+          } else {
+            currPts.delete();
+            markerTracking = false;
+            markerPrevGray.delete();
+            markerPrevGray = null;
+            markerPrevPts.delete();
+            markerPrevPts = null;
+          }
+
+          status.delete();
+          err.delete();
+        }
+
+        // If not currently tracking, (re)detect the marker using ORB+homography.
+        if (!cornersProc) {
+          const det = markerTracker.detect(gray);
+          if (det && det.corners && det.corners.length === 4) {
+            cornersProc = det.corners;
+
+            // Seed tracking state
+            markerPrevGray?.delete?.();
+            markerPrevGray = gray.clone();
+            markerPrevPts?.delete?.();
+            markerPrevPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+              cornersProc[0].x, cornersProc[0].y,
+              cornersProc[1].x, cornersProc[1].y,
+              cornersProc[2].x, cornersProc[2].y,
+              cornersProc[3].x, cornersProc[3].y
+            ]);
+            markerTracking = true;
+
+            det.homography?.delete?.();
+          }
+        }
+
+        if (cornersProc) {
           // Scale from processing canvas coords to raw video coords (initPose uses video dimensions)
           const sx = videoEl.videoWidth / camera.cvCanvas.width;
           const sy = videoEl.videoHeight / camera.cvCanvas.height;
-          const imagePtsScaled = det.corners.map(p => ({ x: p.x * sx, y: p.y * sy }));
+          const imagePtsScaled = cornersProc.map(p => ({ x: p.x * sx, y: p.y * sy }));
 
           const half = 0.1016 / 2; // 4 inches in meters
           const objectPoints = [
@@ -330,16 +405,18 @@ window.addEventListener('load', () => {
           ];
 
           const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
-          if (pose) {
+          if (pose && !poseJumpTooLarge(lastStableMarkerPose, pose)) {
+            lastStableMarkerPose = pose;
             latestPose = pose;
             renderer.setAnchorPose(pose);
+          } else if (lastStableMarkerPose) {
+            renderer.setAnchorPose(lastStableMarkerPose);
+          } else {
+            renderer.setAnchorPose(null);
           }
-
-          // cleanup homography mat
-          det.homography?.delete?.();
         } else {
           // no marker in this frame
-          renderer.setAnchorPose(null);
+          renderer.setAnchorPose(lastStableMarkerPose);
         }
       }
     } catch (e) {
