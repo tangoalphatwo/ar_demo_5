@@ -176,8 +176,16 @@ window.addEventListener('load', () => {
     try {
       const gltf = await renderer.loadGLB('model/Avocado2.glb');
       renderer.model = gltf.scene;
+
+      const nativeSize = renderer.computeBoundingSize(renderer.model);
+      if (nativeSize) console.log('Avocado native bbox (scene units):', nativeSize);
+
       renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
       renderer.model.scale.setScalar(0.01);
+
+      const scaledSize = renderer.computeBoundingSize(renderer.model);
+      if (scaledSize) console.log('Avocado scaled bbox (scene units):', scaledSize);
+
       renderer.anchor.add(renderer.model);
       avocadoLoaded = true;
       showToast('Avocado loaded');

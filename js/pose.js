@@ -77,15 +77,16 @@ export function initPose(video, cv) {
 function toCvPoint2f(points) {
   const data = [];
   points.forEach(p => data.push(p.x, p.y));
-  // Use Nx2 CV_64F mat so underlying data64F is available and length matches rows*cols
-  return matFromArray(points.length, 2, cvModule.CV_64F, data);
+  // OpenCV.js solvePnP expects Nx1 with 2 channels (Point2f/Point2d)
+  // Use cv.matFromArray which understands multi-channel element sizes.
+  return cvModule.matFromArray(points.length, 1, cvModule.CV_64FC2, data);
 }
 
 function toCvPoint3f(points) {
   const data = [];
   points.forEach(p => data.push(p.x, p.y, p.z));
-  // Use Nx3 CV_64F mat for object points
-  return matFromArray(points.length, 3, cvModule.CV_64F, data);
+  // OpenCV.js solvePnP expects Nx1 with 3 channels (Point3f/Point3d)
+  return cvModule.matFromArray(points.length, 1, cvModule.CV_64FC3, data);
 }
 
 export function setWorldOrigin() {

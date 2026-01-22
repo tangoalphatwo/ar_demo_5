@@ -68,6 +68,14 @@ export class ARRenderer {
     });
   }
 
+  computeBoundingSize(object3d) {
+    if (!object3d) return null;
+    const box = new THREE.Box3().setFromObject(object3d);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    return { x: size.x, y: size.y, z: size.z };
+  }
+
   setAnchorPose(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) {
       this.anchor.visible = false;
