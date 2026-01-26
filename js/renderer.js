@@ -111,6 +111,64 @@ export class ARRenderer {
     this.anchor.visible = true;
   }
 
+  // Preferred AR path: treat the marker as world origin and move the camera.
+  // pose is marker->camera (OpenCV solvePnP), so camera->world is its inverse.
+  setCameraFromMarkerPose(pose) {
+    if (!pose || !pose.position || !pose.rotationMatrix) {
+      this.anchor.visible = false;
+      return;
+    }
+
+    const r = pose.rotationMatrix;
+    const r00 = r[0], r01 = r[1], r02 = r[2];
+    const r10 = r[3], r11 = r[4], r12 = r[5];
+    const r20 = r[6], r21 = r[7], r22 = r[8];
+
+    // Convert OpenCV to Three coordinates: R_three = S * R_cv * S, S=diag(1,-1,-1)
+    const Rcw = new THREE.Matrix3();
+    Rcw.set(
+      r00, -r01, -r02,
+      -r10, r11, r12,
+      -r20, r21, r22
+    );
+
+    // t_three (world->camera) from pose.position (which already flipped Y in pose.js)
+    const tcw = new THREE.Vector3(pose.position.x, pose.position.y, -pose.position.z);
+
+    // Invert: T_wc = [R_wc | t_wc] where R_wc = R_cw^T, t_wc = -R_cw^T * t_cw
+    const Rwc = Rcw.clone().transpose();
+
+    const t_wc = tcw.clone();
+    // multiply by Rwc: t' = Rwc * tcw
+    const e = Rwc.elements;
+    const x = t_wc.x, y = t_wc.y, z = t_wc.z;
+    t_wc.set(
+      e[0] * x + e[1] * y + e[2] * z,
+      e[3] * x + e[4] * y + e[5] * z,
+      e[6] * x + e[7] * y + e[8] * z
+    );
+    t_wc.multiplyScalar(-1);
+
+    // Apply to Three camera (camera is an Object3D transform in world)
+    const m = new THREE.Matrix4();
+    const re = Rwc.elements;
+    m.set(
+      re[0], re[1], re[2], t_wc.x,
+      re[3], re[4], re[5], t_wc.y,
+      re[6], re[7], re[8], t_wc.z,
+      0, 0, 0, 1
+    );
+
+    this.camera.matrixAutoUpdate = false;
+    this.camera.matrix.copy(m);
+    this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+
+    // Keep anchor at marker origin
+    this.anchor.position.set(0, 0, 0);
+    this.anchor.quaternion.set(0, 0, 0, 1);
+    this.anchor.visible = true;
+  }
+
   render() {
     this.renderer.render(this.scene, this.camera);
   }

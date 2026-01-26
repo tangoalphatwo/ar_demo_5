@@ -160,7 +160,13 @@ window.addEventListener('load', () => {
       console.warn('initPose failed (OpenCV may not be ready):', e);
     }
 
-    slam = new SlamCore(cvInstance);
+    // Only enable SLAM if this OpenCV build has the required epipolar methods.
+    if (cvInstance.findEssentialMat || cvInstance.findFundamentalMat) {
+      slam = new SlamCore(cvInstance);
+    } else {
+      slam = null;
+      console.warn('SLAM disabled: OpenCV build missing findEssentialMat/findFundamentalMat');
+    }
 
     // Initialize marker tracker + load template
     try {
@@ -181,7 +187,7 @@ window.addEventListener('load', () => {
       if (nativeSize) console.log('Avocado native bbox (scene units):', nativeSize);
 
       renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
-      renderer.model.scale.setScalar(0.01);
+      renderer.model.scale.setScalar(0.0015); // model is large; scale down to fit marker
 
       const scaledSize = renderer.computeBoundingSize(renderer.model);
       if (scaledSize) console.log('Avocado scaled bbox (scene units):', scaledSize);
@@ -350,6 +356,7 @@ window.addEventListener('load', () => {
     try {
       if (slam) slam.processFrame(frame);
     } catch (err) {
+      // SLAM is optional; keep AR running even if it fails
       console.warn('SLAM processing error:', err);
     }
 
@@ -436,19 +443,27 @@ window.addEventListener('load', () => {
           if (pose && !poseJumpTooLarge(lastStableMarkerPose, pose)) {
             lastStableMarkerPose = pose;
             latestPose = pose;
-            renderer.setAnchorPose(pose);
+            renderer.setCameraFromMarkerPose(pose);
           } else if (lastStableMarkerPose) {
-            renderer.setAnchorPose(lastStableMarkerPose);
+            renderer.setCameraFromMarkerPose(lastStableMarkerPose);
           } else {
-            renderer.setAnchorPose(null);
+            renderer.setCameraFromMarkerPose(null);
           }
         } else {
           // no marker in this frame
-          renderer.setAnchorPose(lastStableMarkerPose);
+          renderer.setCameraFromMarkerPose(lastStableMarkerPose);
         }
       }
     } catch (e) {
       console.warn('Marker pose error:', e);
+    }
+
+    // Occasional pose debug
+    if (showDebug && latestPose && debugInfo) {
+      const p = latestPose.position;
+      debugInfo.hidden = false;
+      debugInfo.setAttribute('aria-hidden', 'false');
+      debugInfo.textContent = `${debugInfo.textContent}\npose(m): x=${p.x.toFixed(3)} y=${p.y.toFixed(3)} z=${p.z.toFixed(3)}`;
     }
 
     if (!prevGray || !prevPoints || prevPoints.rows === 0) {

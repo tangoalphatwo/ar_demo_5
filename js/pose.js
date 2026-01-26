@@ -79,14 +79,14 @@ function toCvPoint2f(points) {
   points.forEach(p => data.push(p.x, p.y));
   // OpenCV.js solvePnP expects Nx1 with 2 channels (Point2f/Point2d)
   // Use cv.matFromArray which understands multi-channel element sizes.
-  return cvModule.matFromArray(points.length, 1, cvModule.CV_64FC2, data);
+  return cvModule.matFromArray(points.length, 1, cvModule.CV_32FC2, data);
 }
 
 function toCvPoint3f(points) {
   const data = [];
   points.forEach(p => data.push(p.x, p.y, p.z));
   // OpenCV.js solvePnP expects Nx1 with 3 channels (Point3f/Point3d)
-  return cvModule.matFromArray(points.length, 1, cvModule.CV_64FC3, data);
+  return cvModule.matFromArray(points.length, 1, cvModule.CV_32FC3, data);
 }
 
 export function setWorldOrigin() {
