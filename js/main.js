@@ -470,7 +470,8 @@ window.addEventListener('load', () => {
           lastHadMarker = true;
         } else {
           // no marker in this frame
-          renderer.setAnchorPose(null);
+          // Keep last known pose so content persists after marker loss.
+          renderer.setAnchorPose(lastStableMarkerPose);
           if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
         }
