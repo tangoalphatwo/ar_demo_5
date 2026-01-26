@@ -57,6 +57,13 @@ window.addEventListener('load', () => {
   let markerTracker = null;
   let avocadoLoaded = false;
 
+  // Throttled logging to avoid spamming the console
+  let frameIndex = 0;
+  let lastHadMarker = false;
+  function logEvery(n, ...args) {
+    if (frameIndex % n === 0) console.log(...args);
+  }
+
   // Marker corner tracking for stability
   let markerTracking = false;
   let markerPrevGray = null;
@@ -187,7 +194,7 @@ window.addEventListener('load', () => {
       if (nativeSize) console.log('Avocado native bbox (scene units):', nativeSize);
 
       renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
-      renderer.model.scale.setScalar(0.0015); // model is large; scale down to fit marker
+      renderer.model.scale.setScalar(0.001); // model is large; scale down to fit marker
 
       const scaledSize = renderer.computeBoundingSize(renderer.model);
       if (scaledSize) console.log('Avocado scaled bbox (scene units):', scaledSize);
@@ -323,6 +330,8 @@ window.addEventListener('load', () => {
   function loop() {
     if (!running || !cvInstance) return;
 
+    frameIndex++;
+
     const cv = cvInstance;
     const grabbed = camera.grabFrame();
     if (!grabbed || !grabbed.imageData) {
@@ -346,9 +355,13 @@ window.addEventListener('load', () => {
       const u = xInVideoCss / drawRectForFrame.drawWidth;
       const v = yInVideoCss / drawRectForFrame.drawHeight;
 
+      // Clamp to video bounds to prevent occasional out-of-range points destabilizing PnP
+      const uc = Math.min(1, Math.max(0, u));
+      const vc = Math.min(1, Math.max(0, v));
+
       return {
-        x: u * videoEl.videoWidth,
-        y: v * videoEl.videoHeight
+        x: uc * videoEl.videoWidth,
+        y: vc * videoEl.videoHeight
       };
     }
 
@@ -443,15 +456,23 @@ window.addEventListener('load', () => {
           if (pose && !poseJumpTooLarge(lastStableMarkerPose, pose)) {
             lastStableMarkerPose = pose;
             latestPose = pose;
-            renderer.setCameraFromMarkerPose(pose);
+            renderer.setAnchorPose(pose);
+            logEvery(30, '[Marker] pose ok', pose.position);
           } else if (lastStableMarkerPose) {
-            renderer.setCameraFromMarkerPose(lastStableMarkerPose);
+            renderer.setAnchorPose(lastStableMarkerPose);
+            if (pose) logEvery(30, '[Marker] pose rejected (jump too large)', { prev: lastStableMarkerPose.position, next: pose.position });
           } else {
-            renderer.setCameraFromMarkerPose(null);
+            renderer.setAnchorPose(null);
+            if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
           }
+
+          if (!lastHadMarker) console.log('[Marker] acquired');
+          lastHadMarker = true;
         } else {
           // no marker in this frame
-          renderer.setCameraFromMarkerPose(lastStableMarkerPose);
+          renderer.setAnchorPose(null);
+          if (lastHadMarker) console.log('[Marker] lost');
+          lastHadMarker = false;
         }
       }
     } catch (e) {
