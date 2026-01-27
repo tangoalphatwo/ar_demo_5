@@ -16,6 +16,9 @@ export class SlamCore {
         this.currGray = null;
         this.prevGray = null;
         this.prevPoints = null;
+
+        // Per-frame delta from recoverPose (camera1->camera2)
+        this.lastDelta = null;
     }
 
     _ensureMats(width, height) {
@@ -27,6 +30,9 @@ export class SlamCore {
 
     processFrame(imageData) {
         const cv = this.cv;
+
+        // default: no delta this frame
+        this.lastDelta = null;
 
         const width = imageData.width;
         const height = imageData.height;
@@ -129,6 +135,13 @@ export class SlamCore {
             try {
                 cv.recoverPose(E, currMat, prevMat, K, R, t, mask);
 
+                // Capture delta as plain JS arrays for the caller
+                const rArr = (R.data64F && Array.from(R.data64F)) || (R.data32F && Array.from(R.data32F)) || (R.data && Array.from(R.data));
+                const tArr = (t.data64F && Array.from(t.data64F)) || (t.data32F && Array.from(t.data32F)) || (t.data && Array.from(t.data));
+                if (rArr && tArr && rArr.length >= 9 && tArr.length >= 3) {
+                    this.lastDelta = { R: rArr.slice(0, 9), t: tArr.slice(0, 3) };
+                }
+
                 this.pose.R = R.mul(this.pose.R);
                 this.pose.t = this._addTrans(this.pose.t, t);
 
@@ -223,7 +236,7 @@ export class SlamCore {
         if (mask && mask.delete) mask.delete();
         if (prevMat && prevMat.delete) prevMat.delete();
 
-        return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D };
+        return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D, delta: this.lastDelta };
     }
 
     _addTrans(t1, t2) {

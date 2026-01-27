@@ -12,6 +12,12 @@
     window.__opencvReady = false;
   
     var Module = {
+      locateFile: function (path) {
+        const params = new URLSearchParams(location.search);
+        const useFull = params.get('opencv') === 'full';
+        if (useFull) return `https://docs.opencv.org/4.x/${path}`;
+        return path; // local libs/opencv.js expects libs/opencv_js.wasm relative to itself
+      },
       onRuntimeInitialized: function () {
         console.log("OpenCV runtime initialized (Module)");
         window.__opencvReady = true;
@@ -19,8 +25,17 @@
     };
   </script>
 
-  <!--<script src="https://docs.opencv.org/4.x/opencv.js"></script>-->
-  <script src="libs/opencv.js"></script>
+  <script>
+    // Default to the bundled OpenCV.js. Add ?opencv=full to load the full OpenCV.js build from docs.opencv.org.
+    (function () {
+      const params = new URLSearchParams(location.search);
+      const useFull = params.get('opencv') === 'full';
+      const s = document.createElement('script');
+      s.async = true;
+      s.src = useFull ? 'https://docs.opencv.org/4.x/opencv.js' : 'libs/opencv.js';
+      document.head.appendChild(s);
+    })();
+  </script>
   <script type="module" src="js/main.js"></script>
 
 </head>

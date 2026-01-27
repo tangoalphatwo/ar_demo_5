@@ -70,6 +70,35 @@ window.addEventListener('load', () => {
   let markerPrevPts = null; // cv.Mat 4x1 CV_32FC2
   let lastStableMarkerPose = null;
 
+  // SLAM scale estimation using marker PnP while marker is visible
+  let slamMetricScale = 0.0;
+  let lastMarkerPoseForScale = null;
+  let lastSlamDeltaForScale = null;
+
+  function mat3MulVec3(r, v) {
+    return {
+      x: r[0] * v.x + r[1] * v.y + r[2] * v.z,
+      y: r[3] * v.x + r[4] * v.y + r[5] * v.z,
+      z: r[6] * v.x + r[7] * v.y + r[8] * v.z
+    };
+  }
+
+  function mat3MulMat3(a, b) {
+    return [
+      a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+      a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+      a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+
+      a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+      a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+      a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+
+      a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+      a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+      a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
+    ];
+  }
+
   function poseJumpTooLarge(prev, next) {
     if (!prev || !next) return false;
     const dx = next.position.x - prev.position.x;
@@ -366,8 +395,12 @@ window.addEventListener('load', () => {
     }
 
     // Feed the raw frame to the SLAM core
+    let slamDelta = null;
     try {
-      if (slam) slam.processFrame(frame);
+      if (slam) {
+        const res = slam.processFrame(frame);
+        slamDelta = res?.delta || null;
+      }
     } catch (err) {
       // SLAM is optional; keep AR running even if it fails
       console.warn('SLAM processing error:', err);
@@ -458,6 +491,26 @@ window.addEventListener('load', () => {
             latestPose = pose;
             renderer.setAnchorPose(pose);
             logEvery(30, '[Marker] pose ok', pose.position);
+
+            // Learn SLAM metric scale when both marker pose and SLAM delta are available
+            if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
+              const dx = pose.position.x - lastMarkerPoseForScale.position.x;
+              const dy = pose.position.y - lastMarkerPoseForScale.position.y;
+              const dz = pose.position.z - lastMarkerPoseForScale.position.z;
+              const dMarker = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+              const dt = slamDelta.t;
+              const dSlam = Math.sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
+              if (dMarker > 1e-4 && dSlam > 1e-6) {
+                const s = dMarker / dSlam;
+                // Exponential moving average
+                slamMetricScale = slamMetricScale > 0 ? (0.9 * slamMetricScale + 0.1 * s) : s;
+                logEvery(60, '[SLAM] metric scale', slamMetricScale.toFixed(4));
+              }
+            }
+
+            lastMarkerPoseForScale = pose;
+            lastSlamDeltaForScale = slamDelta;
           } else if (lastStableMarkerPose) {
             renderer.setAnchorPose(lastStableMarkerPose);
             if (pose) logEvery(30, '[Marker] pose rejected (jump too large)', { prev: lastStableMarkerPose.position, next: pose.position });
@@ -471,6 +524,34 @@ window.addEventListener('load', () => {
         } else {
           // no marker in this frame
           // Keep last known pose so content persists after marker loss.
+          if (lastStableMarkerPose && slamDelta && slamDelta.R && slamDelta.t) {
+            const dR = slamDelta.R;
+            const dt = slamDelta.t;
+
+            // Convert SLAM delta translation into the same coordinate convention as pose.js
+            // pose.js flips Y, so do the same here.
+            const dtPose = { x: dt[0], y: -dt[1], z: dt[2] };
+
+            const scale = slamMetricScale > 0 ? slamMetricScale : 0.0; // if unknown, ignore translation
+            const dtScaled = { x: dtPose.x * scale, y: dtPose.y * scale, z: dtPose.z * scale };
+
+            // Propagate marker pose in camera coords: X2 = dR * X1 + dt
+            const newPos = mat3MulVec3(dR, lastStableMarkerPose.position);
+            newPos.x += dtScaled.x;
+            newPos.y += dtScaled.y;
+            newPos.z += dtScaled.z;
+
+            const newRot = lastStableMarkerPose.rotationMatrix
+              ? mat3MulMat3(dR, lastStableMarkerPose.rotationMatrix)
+              : null;
+
+            lastStableMarkerPose = {
+              ...lastStableMarkerPose,
+              position: newPos,
+              rotationMatrix: newRot || lastStableMarkerPose.rotationMatrix
+            };
+          }
+
           renderer.setAnchorPose(lastStableMarkerPose);
           if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;

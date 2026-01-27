@@ -14,6 +14,7 @@ navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
     };
 });
 
+// OpenCV.js AR processing
 function startAR() {
     const src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
     const gray = new cv.Mat();
