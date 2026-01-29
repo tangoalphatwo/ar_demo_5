@@ -6,6 +6,10 @@ let worldOrigin = null;
 let rawPose = null;
 let lastPose = null;
 
+// Keep last rvec/tvec for solvePnP initial guess (significantly stabilizes pose)
+let lastRvecArr = null; // length 3
+let lastTvecArr = null; // length 3
+
 const SMOOTHING = 0.85; // closer to 1 = smoother
 
 function smoothValue(prev, next) {
@@ -133,6 +137,23 @@ export function estimatePose(imagePoints, objectPoints, cv) {
   const rvec = new cvModule.Mat();
   const tvec = new cvModule.Mat();
 
+  // Use previous pose as an initial guess when available.
+  let useGuess = false;
+  try {
+    if (lastRvecArr && lastTvecArr && lastRvecArr.length === 3 && lastTvecArr.length === 3) {
+      // rvec/tvec are 3x1 CV_64F in OpenCV.js
+      const rInit = cvModule.matFromArray(3, 1, cvModule.CV_64F, lastRvecArr);
+      const tInit = cvModule.matFromArray(3, 1, cvModule.CV_64F, lastTvecArr);
+      rInit.copyTo(rvec);
+      tInit.copyTo(tvec);
+      rInit.delete();
+      tInit.delete();
+      useGuess = true;
+    }
+  } catch (e) {
+    useGuess = false;
+  }
+
   const success = cvModule.solvePnP(
     objPts,
     imgPts,
@@ -140,7 +161,7 @@ export function estimatePose(imagePoints, objectPoints, cv) {
     distCoeffs,
     rvec,
     tvec,
-    false,
+    useGuess,
     cvModule.SOLVEPNP_ITERATIVE
   );
 
@@ -163,6 +184,16 @@ export function estimatePose(imagePoints, objectPoints, cv) {
   // Normalize translation and convert rotation matrix to Euler
   const t = normalizeTranslation(tArr);
   const r = rotationMatrixToEuler(rotArr);
+
+  // Save raw rvec/tvec for the next iteration's guess
+  try {
+    const rArr = (rvec.data64F && Array.from(rvec.data64F)) || (rvec.data32F && Array.from(rvec.data32F)) || (rvec.data && Array.from(rvec.data));
+    lastRvecArr = rArr ? rArr.slice(0, 3) : null;
+    lastTvecArr = tArr ? tArr.slice(0, 3) : null;
+  } catch (e) {
+    lastRvecArr = null;
+    lastTvecArr = null;
+  }
 
   rawPose = {
     position: { ...t },
