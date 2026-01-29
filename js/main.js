@@ -191,23 +191,19 @@ window.addEventListener('load', () => {
       cvInstance = await initOpenCV();
       console.log('[Init] OpenCV instance acquired');
 
-      // Log which OpenCV build is active + key SLAM capabilities
-      try {
-        console.log('[OpenCV] mode:', 'hosted');
-        console.log('[OpenCV] capabilities:', {
-          findEssentialMat: typeof cvInstance.findEssentialMat,
-          findFundamentalMat: typeof cvInstance.findFundamentalMat,
-          recoverPose: typeof cvInstance.recoverPose
-        });
-
-        if (typeof cvInstance.getBuildInformation === 'function') {
-          const info = String(cvInstance.getBuildInformation());
-          const head = info.split('\n').slice(0, 6).join('\n');
-          console.log('[OpenCV] build info (head):\n' + head);
+      // Log capabilities on the next tick to avoid blocking startup.
+      setTimeout(() => {
+        try {
+          console.log('[OpenCV] mode:', 'hosted');
+          console.log('[OpenCV] capabilities:', {
+            findEssentialMat: typeof cvInstance.findEssentialMat,
+            findFundamentalMat: typeof cvInstance.findFundamentalMat,
+            recoverPose: typeof cvInstance.recoverPose
+          });
+        } catch (e) {
+          console.warn('[OpenCV] capability logging failed:', e);
         }
-      } catch (e) {
-        console.warn('[OpenCV] capability logging failed:', e);
-      }
+      }, 0);
 
       statusEl.textContent = "Initializing pose...";
       // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately
