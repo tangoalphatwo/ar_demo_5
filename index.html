@@ -16,7 +16,8 @@
         const params = new URLSearchParams(location.search);
         const useFull = params.get('opencv') === 'full';
         if (useFull) return `https://docs.opencv.org/4.x/${path}`;
-        return path; // local libs/opencv.js expects libs/opencv_js.wasm relative to itself
+        // For the bundled build, keep wasm and related assets under /libs
+        return `libs/${path}`;
       },
       onRuntimeInitialized: function () {
         console.log("OpenCV runtime initialized (Module)");
