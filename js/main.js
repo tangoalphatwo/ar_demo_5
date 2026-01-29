@@ -157,11 +157,13 @@ window.addEventListener('load', () => {
 
   startBtn.addEventListener("click", async () => {
     if (running) return; // prevent double-starts
+    try {
+      statusEl.textContent = "Starting camera...";
+      console.log('[Init] Starting camera');
+      await camera.start();
 
-    statusEl.textContent = "Starting camera...";
-    await camera.start();
-
-    await videoEl.play();
+      await videoEl.play();
+      console.log('[Init] Camera playing', { w: videoEl.videoWidth, h: videoEl.videoHeight });
 
     const videoW = videoEl.videoWidth;
     const videoH = videoEl.videoHeight;
@@ -185,58 +187,69 @@ window.addEventListener('load', () => {
     const cvCtx = cvCanvas.getContext('2d');
     cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    cvInstance = await initOpenCV();
+      statusEl.textContent = "Initializing OpenCV...";
+      cvInstance = await initOpenCV();
+      console.log('[Init] OpenCV instance acquired');
 
-    // Log which OpenCV build is active + key SLAM capabilities
-    try {
-      console.log('[OpenCV] mode:', 'hosted');
-      console.log('[OpenCV] capabilities:', {
-        findEssentialMat: typeof cvInstance.findEssentialMat,
-        findFundamentalMat: typeof cvInstance.findFundamentalMat,
-        recoverPose: typeof cvInstance.recoverPose
-      });
+      // Log which OpenCV build is active + key SLAM capabilities
+      try {
+        console.log('[OpenCV] mode:', 'hosted');
+        console.log('[OpenCV] capabilities:', {
+          findEssentialMat: typeof cvInstance.findEssentialMat,
+          findFundamentalMat: typeof cvInstance.findFundamentalMat,
+          recoverPose: typeof cvInstance.recoverPose
+        });
 
-      if (typeof cvInstance.getBuildInformation === 'function') {
-        const info = String(cvInstance.getBuildInformation());
-        const head = info.split('\n').slice(0, 6).join('\n');
-        console.log('[OpenCV] build info (head):\n' + head);
+        if (typeof cvInstance.getBuildInformation === 'function') {
+          const info = String(cvInstance.getBuildInformation());
+          const head = info.split('\n').slice(0, 6).join('\n');
+          console.log('[OpenCV] build info (head):\n' + head);
+        }
+      } catch (e) {
+        console.warn('[OpenCV] capability logging failed:', e);
       }
-    } catch (e) {
-      console.warn('[OpenCV] capability logging failed:', e);
-    }
 
-    // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately
-    try {
-      if (videoMetadataPending || videoEl.readyState >= 1) {
-        initPose(videoEl, cvInstance);
+      statusEl.textContent = "Initializing pose...";
+      // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately
+      try {
+        if (videoMetadataPending || videoEl.readyState >= 1) {
+          initPose(videoEl, cvInstance);
+          console.log('[Init] Pose intrinsics initialized');
+        }
+      } catch (e) {
+        console.warn('initPose failed (OpenCV may not be ready):', e);
       }
-    } catch (e) {
-      console.warn('initPose failed (OpenCV may not be ready):', e);
-    }
 
-    // Only enable SLAM if this OpenCV build has the required epipolar + pose recovery methods.
-    const canSlam = !!(cvInstance.recoverPose && (cvInstance.findEssentialMat || cvInstance.findFundamentalMat));
-    if (canSlam) {
-      slam = new SlamCore(cvInstance);
-    } else {
-      slam = null;
-      console.warn('SLAM disabled: OpenCV build missing findEssentialMat/findFundamentalMat/recoverPose.');
-    }
+      statusEl.textContent = "Checking SLAM...";
+      // Only enable SLAM if this OpenCV build has the required epipolar + pose recovery methods.
+      const canSlam = !!(cvInstance.recoverPose && (cvInstance.findEssentialMat || cvInstance.findFundamentalMat));
+      if (canSlam) {
+        slam = new SlamCore(cvInstance);
+        console.log('[Init] SLAM enabled');
+      } else {
+        slam = null;
+        console.warn('SLAM disabled: OpenCV build missing findEssentialMat/findFundamentalMat/recoverPose.');
+      }
 
-    // Initialize marker tracker + load template
-    try {
-      markerTracker = new MarkerTracker(cvInstance);
-      await markerTracker.loadTemplate('marker/WorldZeroMarker.png');
-      showToast('Marker template loaded');
-    } catch (e) {
-      console.warn('MarkerTracker init failed:', e);
-      showToast('Marker tracker unavailable');
-    }
+      statusEl.textContent = "Loading marker template...";
+      // Initialize marker tracker + load template
+      try {
+        markerTracker = new MarkerTracker(cvInstance);
+        console.log('[Init] Loading marker template');
+        await markerTracker.loadTemplate('marker/WorldZeroMarker.png');
+        console.log('[Init] Marker template loaded');
+        showToast('Marker template loaded');
+      } catch (e) {
+        console.warn('MarkerTracker init failed:', e);
+        showToast('Marker tracker unavailable');
+      }
 
-    // Load Avocado model (once)
-    try {
-      const gltf = await renderer.loadGLB('model/Avocado2.glb');
-      renderer.model = gltf.scene;
+      statusEl.textContent = "Loading model...";
+      // Load Avocado model (once)
+      try {
+        console.log('[Init] Loading model');
+        const gltf = await renderer.loadGLB('model/Avocado2.glb');
+        renderer.model = gltf.scene;
 
       const nativeSize = renderer.computeBoundingSize(renderer.model);
       if (nativeSize) console.log('Avocado native bbox (scene units):', nativeSize);
@@ -247,34 +260,40 @@ window.addEventListener('load', () => {
       const scaledSize = renderer.computeBoundingSize(renderer.model);
       if (scaledSize) console.log('Avocado scaled bbox (scene units):', scaledSize);
 
-      renderer.anchor.add(renderer.model);
-      avocadoLoaded = true;
-      showToast('Avocado loaded');
+        renderer.anchor.add(renderer.model);
+        avocadoLoaded = true;
+        console.log('[Init] Model loaded + attached');
+        showToast('Avocado loaded');
+      } catch (e) {
+        console.warn('Failed to load Avocado2.glb:', e);
+        showToast('Failed to load model');
+      }
+
+      statusEl.textContent = "Running";
+      running = true;
+      loop(); // START THE FRAME LOOP
+
+      // Reveal the debug controls only after entering the AR experience
+      if (debugToggle) {
+        debugToggle.hidden = false;
+        debugToggle.setAttribute('aria-pressed', 'false');
+        debugToggle.textContent = 'Show Debug';
+      }
+      if (debugInfo) {
+        debugInfo.hidden = true;
+        debugInfo.setAttribute('aria-hidden', 'true');
+      }
+
+      // Hide the Start button after AR begins to avoid accidental re-starts
+      if (startBtn) {
+        startBtn.hidden = true;
+      }
     } catch (e) {
-      console.warn('Failed to load Avocado2.glb:', e);
-      showToast('Failed to load model');
+      console.error('[Init] Fatal startup error:', e);
+      statusEl.textContent = 'Error starting AR (see console)';
+      showToast('Error starting AR');
+      running = false;
     }
-
-    running = true;
-    loop(); // START THE FRAME LOOP
-
-    // Reveal the debug controls only after entering the AR experience
-    if (debugToggle) {
-      debugToggle.hidden = false;
-      debugToggle.setAttribute('aria-pressed', 'false');
-      debugToggle.textContent = 'Show Debug';
-    }
-    if (debugInfo) {
-      debugInfo.hidden = true;
-      debugInfo.setAttribute('aria-hidden', 'true');
-    }
-
-    // Hide the Start button after AR begins to avoid accidental re-starts
-    if (startBtn) {
-      startBtn.hidden = true;
-    }
-
-    // (toast helper moved to outer scope)
   });
 
   function drawFeatures(points) {
