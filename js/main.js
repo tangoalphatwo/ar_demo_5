@@ -189,9 +189,7 @@ window.addEventListener('load', () => {
 
     // Log which OpenCV build is active + key SLAM capabilities
     try {
-      const params = new URLSearchParams(location.search);
-      const mode = params.get('opencv') === 'full' ? 'full' : 'bundled';
-      console.log('[OpenCV] mode:', mode);
+      console.log('[OpenCV] mode:', 'hosted');
       console.log('[OpenCV] capabilities:', {
         findEssentialMat: typeof cvInstance.findEssentialMat,
         findFundamentalMat: typeof cvInstance.findFundamentalMat,
@@ -222,7 +220,7 @@ window.addEventListener('load', () => {
       slam = new SlamCore(cvInstance);
     } else {
       slam = null;
-      console.warn('SLAM disabled: OpenCV build missing findEssentialMat/findFundamentalMat');
+      console.warn('SLAM disabled: OpenCV build missing findEssentialMat/findFundamentalMat/recoverPose.');
     }
 
     // Initialize marker tracker + load template
