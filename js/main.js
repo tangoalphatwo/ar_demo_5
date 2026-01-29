@@ -187,6 +187,26 @@ window.addEventListener('load', () => {
 
     cvInstance = await initOpenCV();
 
+    // Log which OpenCV build is active + key SLAM capabilities
+    try {
+      const params = new URLSearchParams(location.search);
+      const mode = params.get('opencv') === 'full' ? 'full' : 'bundled';
+      console.log('[OpenCV] mode:', mode);
+      console.log('[OpenCV] capabilities:', {
+        findEssentialMat: typeof cvInstance.findEssentialMat,
+        findFundamentalMat: typeof cvInstance.findFundamentalMat,
+        recoverPose: typeof cvInstance.recoverPose
+      });
+
+      if (typeof cvInstance.getBuildInformation === 'function') {
+        const info = String(cvInstance.getBuildInformation());
+        const head = info.split('\n').slice(0, 6).join('\n');
+        console.log('[OpenCV] build info (head):\n' + head);
+      }
+    } catch (e) {
+      console.warn('[OpenCV] capability logging failed:', e);
+    }
+
     // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately
     try {
       if (videoMetadataPending || videoEl.readyState >= 1) {
@@ -196,8 +216,9 @@ window.addEventListener('load', () => {
       console.warn('initPose failed (OpenCV may not be ready):', e);
     }
 
-    // Only enable SLAM if this OpenCV build has the required epipolar methods.
-    if (cvInstance.findEssentialMat || cvInstance.findFundamentalMat) {
+    // Only enable SLAM if this OpenCV build has the required epipolar + pose recovery methods.
+    const canSlam = !!(cvInstance.recoverPose && (cvInstance.findEssentialMat || cvInstance.findFundamentalMat));
+    if (canSlam) {
       slam = new SlamCore(cvInstance);
     } else {
       slam = null;
