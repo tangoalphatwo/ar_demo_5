@@ -146,17 +146,38 @@ window.addEventListener('load', () => {
       console.warn('[InitOpenCV] preflight log failed:', e);
     }
 
+    function makeNonThenable(cvObj) {
+      if (!cvObj) return cvObj;
+      try {
+        // Some OpenCV.js builds expose a non-enumerable `then` function.
+        // Returning a thenable from an async function causes the outer Promise
+        // to adopt it, which can hang forever.
+        if (typeof cvObj.then === 'function') {
+          console.warn('[InitOpenCV] cv is thenable; wrapping to avoid await hang');
+          return new Proxy(cvObj, {
+            get(target, prop, receiver) {
+              if (prop === 'then') return undefined;
+              return Reflect.get(target, prop, receiver);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('[InitOpenCV] thenable check failed:', e);
+      }
+      return cvObj;
+    }
+
     // cv is a Promise in modularized builds
     if (window.cv instanceof Promise) {
       const cvInstance = await window.cv;
       console.log("OpenCV ready (awaited Promise)");
-      return cvInstance;
+      return makeNonThenable(cvInstance);
     }
   
     // Fallback (non-modularized build)
     if (window.cv && window.cv.Mat) {
       console.log("OpenCV ready (non-modularized)");
-      const cvInstance = window.cv;
+      const cvInstance = makeNonThenable(window.cv);
       // Touch a few fields to ensure the object is usable
       try {
         console.log('[InitOpenCV] Mat exists:', !!cvInstance.Mat);
