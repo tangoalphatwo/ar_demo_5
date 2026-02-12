@@ -138,6 +138,13 @@ window.addEventListener('load', () => {
   
   async function initOpenCV() {
     console.log("Initializing OpenCV");
+    try {
+      console.log('[InitOpenCV] __opencvReady:', window.__opencvReady);
+      console.log('[InitOpenCV] window.cv type:', typeof window.cv);
+      console.log('[InitOpenCV] window.cv keys sample:', window.cv && typeof window.cv === 'object' ? Object.keys(window.cv).slice(0, 10) : null);
+    } catch (e) {
+      console.warn('[InitOpenCV] preflight log failed:', e);
+    }
 
     // cv is a Promise in modularized builds
     if (window.cv instanceof Promise) {
@@ -149,7 +156,15 @@ window.addEventListener('load', () => {
     // Fallback (non-modularized build)
     if (window.cv && window.cv.Mat) {
       console.log("OpenCV ready (non-modularized)");
-      return window.cv;
+      const cvInstance = window.cv;
+      // Touch a few fields to ensure the object is usable
+      try {
+        console.log('[InitOpenCV] Mat exists:', !!cvInstance.Mat);
+        console.log('[InitOpenCV] version:', cvInstance.version || '(no version field)');
+      } catch (e) {
+        console.warn('[InitOpenCV] post-ready probe failed:', e);
+      }
+      return cvInstance;
     }
   
     throw new Error("OpenCV not found");
@@ -158,6 +173,12 @@ window.addEventListener('load', () => {
   startBtn.addEventListener("click", async () => {
     if (running) return; // prevent double-starts
     try {
+      // Button UX: show state immediately
+      if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Starting…';
+      }
+
       statusEl.textContent = "Starting camera...";
       console.log('[Init] Starting camera');
       await camera.start();
@@ -188,8 +209,21 @@ window.addEventListener('load', () => {
     cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       statusEl.textContent = "Initializing OpenCV...";
+      console.log('[Init] Before initOpenCV await');
+
+      // Watchdog: if init stalls, at least we get a log message.
+      const watchdog = setTimeout(() => {
+        console.warn('[Init] initOpenCV appears stalled > 5s');
+        try { statusEl.textContent = 'OpenCV init stalled (see console)'; } catch {}
+      }, 5000);
+
       cvInstance = await initOpenCV();
+      clearTimeout(watchdog);
+
       console.log('[Init] OpenCV instance acquired');
+
+      // Let the UI paint before continuing into heavier initialization.
+      await new Promise(r => setTimeout(r, 0));
 
       // Log capabilities on the next tick to avoid blocking startup.
       setTimeout(() => {
@@ -289,6 +323,12 @@ window.addEventListener('load', () => {
       statusEl.textContent = 'Error starting AR (see console)';
       showToast('Error starting AR');
       running = false;
+
+      if (startBtn) {
+        startBtn.disabled = false;
+        startBtn.textContent = 'Start AR';
+        startBtn.hidden = false;
+      }
     }
   });
 
