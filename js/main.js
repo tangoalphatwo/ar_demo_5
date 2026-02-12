@@ -1,10 +1,196 @@
 // main.js
-import { CameraManager } from './camera.js';
-import { ARRenderer } from './renderer.js';
-import { SlamCore } from './slam_core.js';
-import { initPose, estimatePose } from "./pose.js";
-import { MarkerTracker } from './marker_tracker.js';
+// Minimal bootstrap: clicking Start initializes OpenCV and logs basic capabilities.
 
+function setStatus(text) {
+  const statusEl = document.getElementById('status');
+  if (statusEl) statusEl.textContent = text;
+}
+
+function makeNonThenable(cvObj) {
+  if (!cvObj) return cvObj;
+  try {
+    if (typeof cvObj.then === 'function') {
+      console.warn('[OpenCV] cv is thenable; wrapping to avoid await-adoption');
+      return new Proxy(cvObj, {
+        get(target, prop, receiver) {
+          if (prop === 'then') return undefined;
+          return Reflect.get(target, prop, receiver);
+        }
+      });
+    }
+  } catch {
+    // ignore
+  }
+  return cvObj;
+}
+
+async function waitForOpenCV({ timeoutMs = 15000 } = {}) {
+  const start = performance.now();
+
+  while (performance.now() - start < timeoutMs) {
+    // Modular builds sometimes expose cv as a Promise
+    if (window.cv instanceof Promise) {
+      const cvResolved = await window.cv;
+      return makeNonThenable(cvResolved);
+    }
+
+    // Non-modular builds expose cv as an object; docs.opencv.org build uses Module.onRuntimeInitialized
+    if (window.__opencvReady && window.cv && window.cv.Mat) {
+      return makeNonThenable(window.cv);
+    }
+
+    // Fallback: if __opencvReady isn't set for some reason, still accept cv when it looks usable
+    if (window.cv && window.cv.Mat) {
+      return makeNonThenable(window.cv);
+    }
+
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  throw new Error('Timed out waiting for OpenCV to initialize');
+}
+
+function logOpenCVInfo(cv) {
+  console.log('[OpenCV] instance type:', typeof cv);
+  console.log('[OpenCV] version:', cv.version || '(no version field)');
+
+  const caps = {
+    Mat: !!cv.Mat,
+    getBuildInformation: typeof cv.getBuildInformation,
+    ORB_create: typeof cv.ORB_create,
+    BFMatcher: typeof cv.BFMatcher,
+    findHomography: typeof cv.findHomography,
+    solvePnP: typeof cv.solvePnP,
+    Rodrigues: typeof cv.Rodrigues,
+    recoverPose: typeof cv.recoverPose,
+    findEssentialMat: typeof cv.findEssentialMat,
+    findFundamentalMat: typeof cv.findFundamentalMat,
+    calcOpticalFlowPyrLK: typeof cv.calcOpticalFlowPyrLK,
+    goodFeaturesToTrack: typeof cv.goodFeaturesToTrack,
+  };
+  console.table(caps);
+
+  try {
+    if (typeof cv.getBuildInformation === 'function') {
+      console.log('[OpenCV] build info (first 20 lines):\n' + String(cv.getBuildInformation()).split('\n').slice(0, 20).join('\n'));
+    }
+  } catch (e) {
+    console.warn('[OpenCV] getBuildInformation failed:', e);
+  }
+
+  // Sanity: create and delete a tiny Mat
+  try {
+    const m = cv.Mat.eye(2, 2, cv.CV_64F);
+    const data = m.data64F ? Array.from(m.data64F) : (m.data32F ? Array.from(m.data32F) : null);
+    console.log('[OpenCV] Mat.eye(2) ok:', data);
+    m.delete();
+  } catch (e) {
+    console.warn('[OpenCV] Mat sanity check failed:', e);
+  }
+}
+
+async function startCameraPreview() {
+  const videoEl = document.getElementById('camera');
+  const cvCanvas = document.getElementById('cvCanvas');
+  const threeCanvas = document.getElementById('threeCanvas');
+
+  if (!videoEl) throw new Error('Missing #camera element');
+  if (!cvCanvas) throw new Error('Missing #cvCanvas element');
+
+  // Make sure the preview is actually visible
+  if (threeCanvas) threeCanvas.style.display = 'none';
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  });
+
+  videoEl.srcObject = stream;
+  videoEl.playsInline = true;
+  videoEl.muted = true;
+
+  await new Promise((resolve) => {
+    if (videoEl.readyState >= 1) return resolve();
+    videoEl.onloadedmetadata = () => resolve();
+  });
+
+  await videoEl.play();
+
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  console.log('[Camera] video size:', { vw, vh });
+
+  // Set the canvas backing buffer to match the video.
+  // CSS keeps aspect ratio and fits to viewport via style.css.
+  cvCanvas.width = vw;
+  cvCanvas.height = vh;
+
+  const ctx = cvCanvas.getContext('2d', { alpha: false, desynchronized: true });
+  let running = true;
+
+  const draw = () => {
+    if (!running) return;
+    ctx.drawImage(videoEl, 0, 0, cvCanvas.width, cvCanvas.height);
+    requestAnimationFrame(draw);
+  };
+  requestAnimationFrame(draw);
+
+  return {
+    stop() {
+      running = false;
+      try {
+        const tracks = stream.getTracks();
+        tracks.forEach(t => t.stop());
+      } catch {
+        // ignore
+      }
+    }
+  };
+}
+
+window.addEventListener('load', () => {
+  const startBtn = document.getElementById('startBtn');
+
+  if (!startBtn) {
+    console.warn('Start button not found');
+    return;
+  }
+
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    setStatus('Starting camera + OpenCV…');
+
+    console.log('[Boot] __opencvReady:', window.__opencvReady);
+    console.log('[Boot] window.cv type:', typeof window.cv);
+
+    try {
+      // Start camera + OpenCV in parallel (both require the user gesture).
+      const [cameraHandle, cv] = await Promise.all([
+        startCameraPreview(),
+        waitForOpenCV({ timeoutMs: 20000 })
+      ]);
+
+      window.__cameraHandle = cameraHandle;
+      window.cvInstance = cv; // handy for debugging in DevTools
+
+      setStatus('Camera running + OpenCV ready (see console)');
+      console.log('[Boot] Camera running');
+      console.log('[Boot] OpenCV ready');
+      logOpenCVInfo(cv);
+    } catch (e) {
+      setStatus('Startup failed (see console)');
+      console.error('[Boot] Startup failed:', e);
+      startBtn.disabled = false;
+    }
+  });
+});
+
+// --- Old AR prototype preserved but disabled while restarting ---
+if (false) {
 window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
   const cvCanvas = document.getElementById('cvCanvas');
@@ -503,14 +689,18 @@ window.addEventListener('load', () => {
       const u = xInVideoCss / drawRectForFrame.drawWidth;
       const v = yInVideoCss / drawRectForFrame.drawHeight;
 
-      // Clamp to video bounds to prevent occasional out-of-range points destabilizing PnP
+      // IMPORTANT: do NOT clamp corners to the edge.
+      // Clamping makes a partially-offscreen marker look like it's still on-screen,
+      // which causes the pose to “stick” / be pushed by the camera edge.
+      // Instead, reject clearly out-of-bounds points.
+      const tol = 0.02; // allow small numeric drift outside [0,1]
+      if (u < -tol || u > 1 + tol || v < -tol || v > 1 + tol) return null;
+
+      // For tiny excursions, clamp back into [0,1].
       const uc = Math.min(1, Math.max(0, u));
       const vc = Math.min(1, Math.max(0, v));
 
-      return {
-        x: uc * videoEl.videoWidth,
-        y: vc * videoEl.videoHeight
-      };
+      return { x: uc * videoEl.videoWidth, y: vc * videoEl.videoHeight };
     }
 
     // Feed the raw frame to the SLAM core
@@ -525,13 +715,16 @@ window.addEventListener('load', () => {
       console.warn('SLAM processing error:', err);
     }
 
-    const rgba = cv.matFromImageData(frame);
-    const gray = new cv.Mat();
-    cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
-
-    // --- Marker-based pose (WorldZeroMarker.png, 4" x 4") ---
+    let rgba = null;
+    let gray = null;
     try {
-      if (markerTracker) {
+      rgba = cv.matFromImageData(frame);
+      gray = new cv.Mat();
+      cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
+
+      // --- Marker-based pose (WorldZeroMarker.png, 4" x 4") ---
+      try {
+        if (markerTracker) {
         let cornersProc = null; // in processing canvas/backing coords
 
         if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
@@ -599,6 +792,22 @@ window.addEventListener('load', () => {
           // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
           const orderedCorners = orderQuadTLTRBRBL(cornersProc);
           const imagePtsScaled = orderedCorners.map(procPointToVideo);
+          const inBounds = imagePtsScaled.every(p => !!p);
+          if (!inBounds) {
+            // If any corner is meaningfully outside the video region, do NOT clamp it.
+            // Clamping causes the pose to be “pushed” toward the screen edge and looks like it’s pinned to the camera.
+            // Treat as no-marker this frame and force re-detect next frame.
+            markerTracking = false;
+            markerPrevGray?.delete?.();
+            markerPrevGray = null;
+            markerPrevPts?.delete?.();
+            markerPrevPts = null;
+            cornersProc = null;
+          }
+
+          if (!cornersProc) {
+            // fall through to loss handling below
+          } else {
 
           const half = 0.1016 / 2; // 4 inches in meters
           const objectPoints = [
@@ -673,10 +882,13 @@ window.addEventListener('load', () => {
             if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
           }
 
-          if (!lastHadMarker) console.log('[Marker] acquired');
-          lastHadMarker = true;
-          framesSinceMarker = 0;
-        } else {
+            if (!lastHadMarker) console.log('[Marker] acquired');
+            lastHadMarker = true;
+            framesSinceMarker = 0;
+          }
+        }
+
+        if (!cornersProc) {
           // no marker in this frame
           framesSinceMarker++;
 
@@ -687,7 +899,7 @@ window.addEventListener('load', () => {
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
             // keep lastStableMarkerPose around for debugging, but don't render it.
-            return requestAnimationFrame(loop);
+            // (Do not return early — we still need to clean up Mats and schedule the next frame.)
           }
 
           // With SLAM enabled, propagate last known pose.
@@ -851,8 +1063,11 @@ window.addEventListener('load', () => {
       console.warn('Pose estimation error:', e);
     }
 
-    rgba.delete();
-    gray.delete();
+    } finally {
+      // Always free per-frame Mats, even if we short-circuit on marker loss.
+      rgba?.delete?.();
+      gray?.delete?.();
+    }
 
     // DRAW
     const ctx = cvCanvas.getContext("2d");
@@ -905,3 +1120,5 @@ window.addEventListener('load', () => {
 
   window.addEventListener('resize', () => renderer.resize());
 });
+
+}
