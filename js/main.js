@@ -60,6 +60,8 @@ window.addEventListener('load', () => {
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
   let lastHadMarker = false;
+  let framesSinceMarker = 0;
+  let loggedReacquireRejection = false;
   function logEvery(n, ...args) {
     if (frameIndex % n === 0) console.log(...args);
   }
@@ -107,6 +109,28 @@ window.addEventListener('load', () => {
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     // reject very large sudden jumps (usually due to a bad homography / corner mixup)
     return dist > 0.25;
+  }
+
+  function orderQuadTLTRBRBL(pts) {
+    if (!pts || pts.length !== 4) return pts;
+    // Standard TL/TR/BR/BL ordering based on sums/diffs
+    const sums = pts.map(p => p.x + p.y);
+    const diffs = pts.map(p => p.x - p.y);
+    const tl = pts[sums.indexOf(Math.min(...sums))];
+    const br = pts[sums.indexOf(Math.max(...sums))];
+    const tr = pts[diffs.indexOf(Math.max(...diffs))];
+    const bl = pts[diffs.indexOf(Math.min(...diffs))];
+    return [tl, tr, br, bl];
+  }
+
+  function poseLooksPlausible(pose) {
+    if (!pose || !pose.position || !pose.rotationMatrix) return false;
+    const { x, y, z } = pose.position;
+    if (![x, y, z].every(Number.isFinite)) return false;
+    // In this demo the marker is typically within ~5cm..2m.
+    if (z < 0.03 || z > 2.5) return false;
+    if (Math.abs(x) > 2.5 || Math.abs(y) > 2.5) return false;
+    return true;
   }
 
   let cvReady = false;
@@ -569,8 +593,12 @@ window.addEventListener('load', () => {
         }
 
         if (cornersProc) {
+          const justAcquired = !lastHadMarker;
+          if (justAcquired) loggedReacquireRejection = false;
+
           // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
-          const imagePtsScaled = cornersProc.map(procPointToVideo);
+          const orderedCorners = orderQuadTLTRBRBL(cornersProc);
+          const imagePtsScaled = orderedCorners.map(procPointToVideo);
 
           const half = 0.1016 / 2; // 4 inches in meters
           const objectPoints = [
@@ -581,7 +609,10 @@ window.addEventListener('load', () => {
           ];
 
           const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
-          if (pose && !poseJumpTooLarge(lastStableMarkerPose, pose)) {
+          const poseOk = poseLooksPlausible(pose);
+          // On reacquire, allow snapping back even if the pose jump is large.
+          const acceptPose = !!pose && poseOk && (justAcquired || !poseJumpTooLarge(lastStableMarkerPose, pose));
+          if (acceptPose) {
             lastStableMarkerPose = pose;
             latestPose = pose;
             renderer.setAnchorPose(pose);
@@ -607,8 +638,36 @@ window.addEventListener('load', () => {
             lastMarkerPoseForScale = pose;
             lastSlamDeltaForScale = slamDelta;
           } else if (lastStableMarkerPose) {
-            renderer.setAnchorPose(lastStableMarkerPose);
-            if (pose) logEvery(30, '[Marker] pose rejected (jump too large)', { prev: lastStableMarkerPose.position, next: pose.position });
+            // If we have a prior pose, keep it unless this is a reacquire attempt.
+            // Without SLAM, a stale pose looks "stuck to the screen", so hide on reacquire failures.
+            if (justAcquired || !slam) {
+              renderer.setAnchorPose(null);
+            } else {
+              renderer.setAnchorPose(lastStableMarkerPose);
+            }
+
+            if (pose && poseOk) {
+              logEvery(30, '[Marker] pose rejected (jump too large)', { prev: lastStableMarkerPose.position, next: pose.position });
+            } else if (pose && !poseOk) {
+              logEvery(30, '[Marker] pose rejected (implausible)', { next: pose.position });
+            }
+
+            if (pose && justAcquired && !loggedReacquireRejection) {
+              loggedReacquireRejection = true;
+              console.warn('[Marker] reacquired but pose rejected; keeping lastStable pose', {
+                prev: lastStableMarkerPose.position,
+                next: pose.position
+              });
+            }
+
+            // If pose is implausible, reset tracking so we don't keep following bad corners.
+            if (pose && !poseOk) {
+              markerTracking = false;
+              markerPrevGray?.delete?.();
+              markerPrevGray = null;
+              markerPrevPts?.delete?.();
+              markerPrevPts = null;
+            }
           } else {
             renderer.setAnchorPose(null);
             if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
@@ -616,9 +675,22 @@ window.addEventListener('load', () => {
 
           if (!lastHadMarker) console.log('[Marker] acquired');
           lastHadMarker = true;
+          framesSinceMarker = 0;
         } else {
           // no marker in this frame
-          // Keep last known pose so content persists after marker loss.
+          framesSinceMarker++;
+
+          // Without SLAM (camera tracking), we cannot keep a stable world anchor.
+          // Freezing the last pose makes the model look stuck to the screen.
+          if (!slam) {
+            renderer.setAnchorPose(null);
+            if (lastHadMarker) console.log('[Marker] lost');
+            lastHadMarker = false;
+            // keep lastStableMarkerPose around for debugging, but don't render it.
+            return requestAnimationFrame(loop);
+          }
+
+          // With SLAM enabled, propagate last known pose.
           if (lastStableMarkerPose && slamDelta && slamDelta.R && slamDelta.t) {
             const dR = slamDelta.R;
             const dt = slamDelta.t;
