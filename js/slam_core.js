@@ -3,6 +3,14 @@ export class SlamCore {
     constructor(cv) {
         this.cv = cv;
 
+        // Feature availability varies across OpenCV.js builds.
+        this.capabilities = {
+            recoverPose: typeof cv.recoverPose === 'function',
+            findEssentialMat: typeof cv.findEssentialMat === 'function',
+            findFundamentalMat: typeof cv.findFundamentalMat === 'function',
+            triangulatePoints: typeof cv.triangulatePoints === 'function'
+        };
+
         this.pose = {
             R: cv.Mat.eye(3, 3, cv.CV_64F),
             t: cv.Mat.zeros(3, 1, cv.CV_64F)
@@ -165,6 +173,37 @@ export class SlamCore {
         ]);
 
         const mask = new cv.Mat();
+
+        // If pose recovery primitives are missing, fall back to pure tracking.
+        const canRecoverPose =
+            typeof cv.recoverPose === 'function' &&
+            (typeof cv.findEssentialMat === 'function' || typeof cv.findFundamentalMat === 'function');
+
+        if (!canRecoverPose) {
+            // Keep pose unchanged; still advance tracking state.
+            this.mapPoints3D = [];
+            this.lastDelta = null;
+
+            if (this.prevGray) this.prevGray.delete();
+            this.prevGray = this.currGray.clone();
+            if (this.prevPoints) this.prevPoints.delete();
+            this.prevPoints = currMat.clone();
+
+            mask.delete();
+            prevMat.delete();
+            currMat.delete();
+            K.delete();
+
+            return {
+                pose: this.pose,
+                mapPoints: this.mapPoints,
+                mapPoints3D: this.mapPoints3D,
+                delta: this.lastDelta,
+                edgePoints2D,
+                warning: 'pose_recovery_unavailable'
+            };
+        }
+
         let E = null;
         if (cv.findEssentialMat) {
             E = cv.findEssentialMat(currMat, prevMat, K, cv.RANSAC, 0.999, 1.0, mask);
@@ -186,8 +225,6 @@ export class SlamCore {
                 throw err;
             }
             if (F) F.delete();
-        } else {
-            throw new Error('Neither cv.findEssentialMat nor cv.findFundamentalMat available in OpenCV.js build');
         }
 
         const R = new cv.Mat();

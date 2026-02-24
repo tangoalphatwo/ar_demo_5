@@ -66,9 +66,11 @@ function logOpenCVInfo(cv) {
   const caps = {
     Mat: !!cv.Mat,
     getBuildInformation: typeof cv.getBuildInformation,
+    ORB: typeof cv.ORB,
     ORB_create: typeof cv.ORB_create,
     BFMatcher: typeof cv.BFMatcher,
     findHomography: typeof cv.findHomography,
+    decomposeHomographyMat: typeof cv.decomposeHomographyMat,
     solvePnP: typeof cv.solvePnP,
     Rodrigues: typeof cv.Rodrigues,
     recoverPose: typeof cv.recoverPose,
@@ -100,6 +102,27 @@ function logOpenCVInfo(cv) {
     m.delete();
   } catch (e) {
     console.warn('[OpenCV] Mat sanity check failed:', e);
+  }
+}
+
+function assertOpenCvCapabilities(cv) {
+  const requireCalib3d = (window.__OPENCV_CONFIG && window.__OPENCV_CONFIG.requireCalib3d) ?? true;
+  if (!requireCalib3d) return;
+
+  const missing = [];
+  if (typeof cv.findEssentialMat !== 'function') missing.push('findEssentialMat');
+  if (typeof cv.findFundamentalMat !== 'function') missing.push('findFundamentalMat');
+  if (typeof cv.recoverPose !== 'function') missing.push('recoverPose');
+
+  // We accept either essential OR fundamental, but recoverPose is required.
+  const hasEorF = typeof cv.findEssentialMat === 'function' || typeof cv.findFundamentalMat === 'function';
+  const hasRecover = typeof cv.recoverPose === 'function';
+  if (!hasEorF || !hasRecover) {
+    const msg =
+      'OpenCV.js build is missing calib3d pose recovery. ' +
+      'Need recoverPose and (findEssentialMat or findFundamentalMat). ' +
+      (missing.length ? `Missing: ${missing.join(', ')}` : '');
+    throw new Error(msg);
   }
 }
 
@@ -231,6 +254,9 @@ window.addEventListener('load', () => {
       console.log('[Boot] OpenCV ready');
       logOpenCVInfo(cv);
 
+      // Hard-fail early if required APIs are missing.
+      assertOpenCvCapabilities(cv);
+
       running = true;
       const { videoEl, cvCanvas, ctx } = cameraHandle;
       const tick = () => {
@@ -255,6 +281,10 @@ window.addEventListener('load', () => {
         let dbg = '';
         const pts3D = result?.mapPoints3D || [];
         dbg += `2D edges: ${result?.edgePoints2D ? result.edgePoints2D.length : 0}\n`;
+        if (result?.warning === 'pose_recovery_unavailable') {
+          dbg += 'SLAM: pose recovery unavailable (missing findEssentialMat/findFundamentalMat/recoverPose)\n';
+          dbg += 'SLAM: running in 2D tracking-only fallback\n';
+        }
         dbg += `3D points: ${pts3D.length}\n`;
         if (pts3D.length >= 80 && planeDetector) {
           const plane = planeDetector.detect(pts3D);
