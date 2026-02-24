@@ -229,6 +229,7 @@ window.addEventListener('load', () => {
   let houseLoaded = false;
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
+  const HOUSE_SCALE_FACTOR = 0.5; // <1 makes the house smaller
 
   if (debugToggle) {
     debugToggle.hidden = false;
@@ -379,7 +380,7 @@ window.addEventListener('load', () => {
 
               // Scale model to be roughly marker-sized
               // Note: Uses Three's unit scale; we treat it as meters.
-              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS);
+              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS * HOUSE_SCALE_FACTOR);
 
               setStatus('Running');
             })
