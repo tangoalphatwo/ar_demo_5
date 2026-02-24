@@ -7,7 +7,15 @@ html, body {
 }
 
 #camera {
-  display: none;
+  /* Keep the video drawable for WebGL uploads (VideoTexture).
+     Some browsers/GPU paths fail when the source is display:none. */
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 #cvCanvas {

@@ -9,7 +9,9 @@ export class ARRenderer {
     this.scene = new THREE.Scene();
 
     const fov = 60;
-    const aspect = canvasEl.clientWidth / canvasEl.clientHeight;
+    const w0 = canvasEl.clientWidth || window.innerWidth || 1;
+    const h0 = canvasEl.clientHeight || window.innerHeight || 1;
+    const aspect = w0 / h0;
     this.camera = new THREE.PerspectiveCamera(fov, aspect, 0.01, 100);
     this.camera.position.set(0, 0, 0);
 
@@ -18,7 +20,8 @@ export class ARRenderer {
       antialias: true,
       alpha: true
     });
-    this.renderer.setSize(canvasEl.clientWidth, canvasEl.clientHeight, false);
+    this.renderer.setSize(w0, h0, false);
+    if ('SRGBColorSpace' in THREE) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Ambient light
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -36,16 +39,44 @@ export class ARRenderer {
   }
 
   setVideoTexture(video) {
-    const texture = new THREE.VideoTexture(video);
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.format = THREE.RGBFormat;
+    if (!video) return;
 
-    // Most robust: Three handles the full-viewport background.
-    this.scene.background = texture;
+    const create = () => {
+      // If the video doesn't have a current frame yet, defer.
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0 || video.videoHeight === 0) {
+        return false;
+      }
 
-    this.bgMesh = null;
-    this.videoTexture = texture;
+      const texture = new THREE.VideoTexture(video);
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+
+      // Avoid forcing texture.format (can trigger texImage2D errors on some browsers).
+      // Hint correct color handling when supported.
+      if ('SRGBColorSpace' in THREE) texture.colorSpace = THREE.SRGBColorSpace;
+
+      // Most robust: Three handles the full-viewport background.
+      this.scene.background = texture;
+
+      this.bgMesh = null;
+      this.videoTexture = texture;
+      return true;
+    };
+
+    if (create()) return;
+
+    const onReady = () => {
+      if (create()) {
+        video.removeEventListener('loadeddata', onReady);
+        video.removeEventListener('canplay', onReady);
+        video.removeEventListener('playing', onReady);
+      }
+    };
+
+    video.addEventListener('loadeddata', onReady, { once: false });
+    video.addEventListener('canplay', onReady, { once: false });
+    video.addEventListener('playing', onReady, { once: false });
   }
 
   async loadGLB(url) {
