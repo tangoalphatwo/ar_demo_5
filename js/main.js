@@ -231,7 +231,8 @@ window.addEventListener('load', () => {
   let lastMarkerLogMs = 0;
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
-  const HOUSE_SCALE_FACTOR = 0.5; // <1 makes the house smaller
+  const MODEL_URL = 'model/Avocado2.glb';
+  const MODEL_SCALE_FACTOR = 1.0; // <1 smaller, >1 larger
   const MARKER_MIN_AREA_FRAC = 0.005;
 
   if (debugToggle) {
@@ -249,6 +250,7 @@ window.addEventListener('load', () => {
       // If the camera has started, bring the cv canvas above/below Three.
       if (cameraHandle?.cvCanvas) {
         cameraHandle.cvCanvas.style.zIndex = debugEnabled ? '3' : '1';
+        cameraHandle.cvCanvas.style.display = debugEnabled ? 'block' : 'none';
       }
     });
   }
@@ -307,8 +309,10 @@ window.addEventListener('load', () => {
       const applyDebugCanvasStacking = () => {
         if (debugEnabled) {
           cvCanvas.style.zIndex = '3';
+          cvCanvas.style.display = 'block';
         } else {
           cvCanvas.style.zIndex = '1';
+          cvCanvas.style.display = 'none';
         }
       };
       applyDebugCanvasStacking();
@@ -390,15 +394,15 @@ window.addEventListener('load', () => {
         if (worldLocked && ar && !houseLoaded && !houseLoading) {
           houseLoading = true;
           setStatus('Loading model…');
-          console.log('[Model] Loading model/house.glb');
-          ar.loadGLB('model/house.glb')
+          console.log('[Model] Loading', MODEL_URL);
+          ar.loadGLB(MODEL_URL)
             .then((gltf) => {
               // Add model to anchor (world origin)
               ar.anchor.add(gltf.scene);
 
               // Scale model to be roughly marker-sized
               // Note: Uses Three's unit scale; we treat it as meters.
-              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS * HOUSE_SCALE_FACTOR);
+              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS * MODEL_SCALE_FACTOR);
 
               setStatus('Running');
               houseLoaded = true;

@@ -18,12 +18,16 @@ export class ARRenderer {
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
-      alpha: true
+      alpha: true,
+      premultipliedAlpha: false
     });
+    const pr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w0, h0, false);
     if ('SRGBColorSpace' in THREE) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // Ensure the WebGL canvas stays transparent so the underlying camera canvas shows through.
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.autoClear = true;
 
     // Ambient light
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -195,12 +199,19 @@ export class ARRenderer {
   }
 
   render() {
+    // Force a full clear + viewport each frame to avoid seam/scanline artifacts on some mobile GPUs.
+    const w = this.canvas.clientWidth || window.innerWidth || 1;
+    const h = this.canvas.clientHeight || window.innerHeight || 1;
+    this.renderer.setViewport(0, 0, w, h);
+    this.renderer.clear(true, true, true);
     this.renderer.render(this.scene, this.camera);
   }
 
   resize() {
-    const w = this.canvas.clientWidth;
-    const h = this.canvas.clientHeight;
+    const w = this.canvas.clientWidth || window.innerWidth || 1;
+    const h = this.canvas.clientHeight || window.innerHeight || 1;
+    const pr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();

@@ -7,24 +7,27 @@ html, body {
 }
 
 #camera {
-  /* Keep the video drawable for WebGL uploads (VideoTexture).
-     Some browsers/GPU paths fail when the source is display:none. */
+  /* Use the real video element as the visible background.
+     iOS Safari can show green/black scanlines when displaying camera frames via canvas. */
   position: fixed;
-  left: -9999px;
-  top: -9999px;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  z-index: 0;
+  background: #000;
   pointer-events: none;
 }
 
 #cvCanvas {
   position: fixed;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  margin: auto;
   z-index: 1;
   pointer-events: none; /* IMPORTANT: keeps button clickable */
+
+  /* Hidden by default; used for debug overlays */
+  display: none;
 
   /* Maintain intrinsic aspect ratio and scale to fit the viewport */
   max-width: 100vw;
@@ -40,6 +43,8 @@ html, body {
   width: 100vw;
   height: 100vh;
   z-index: 2;
+  background: transparent;
+  pointer-events: none;
 }
 
 #ui {
