@@ -334,11 +334,12 @@ window.addEventListener('load', () => {
       initPose(cameraHandle.videoEl, cv);
 
       // Match Three camera projection to the same simple intrinsics used by solvePnP.
-      // pose.js currently uses focalLengthPx = videoWidthPx.
+      // pose.js currently uses focalLengthPx = max(videoWidthPx, videoHeightPx).
+      const focalLengthPx = Math.max(cameraHandle.videoEl.videoWidth, cameraHandle.videoEl.videoHeight);
       ar.setProjectionFromVideo({
         videoWidthPx: cameraHandle.videoEl.videoWidth,
         videoHeightPx: cameraHandle.videoEl.videoHeight,
-        focalLengthPx: cameraHandle.videoEl.videoWidth
+        focalLengthPx
       });
 
       slam = new SlamCore(cv);

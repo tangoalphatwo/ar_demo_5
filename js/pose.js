@@ -67,13 +67,17 @@ export function initPose(video, cv) {
   const width  = video.videoWidth;
   const height = video.videoHeight;
 
-  const focalLength = width;
+  // Rough intrinsics estimate. Using only `width` tends to make the pose "too close"
+  // on tall (portrait) frames, which can make AR content appear huge / offset.
+  const focalLength = Math.max(width, height);
 
   cameraMatrix = matFromArray(3, 3, cvModule.CV_64F, [
     focalLength, 0, width / 2,
     0, focalLength, height / 2,
     0, 0, 1
   ]);
+
+  console.log('[Pose] Intrinsics', { width, height, focalLength });
 
   distCoeffs = cvModule.Mat.zeros(4, 1, cvModule.CV_64F);
 }
