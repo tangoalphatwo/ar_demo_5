@@ -7,13 +7,13 @@ html, body {
 }
 
 #camera {
-  /* Use the real video element as the visible background.
-     iOS Safari can show green/black scanlines when displaying camera frames via canvas. */
+  /* Visible camera background.
+     Sized/positioned via JS to match the processing frame (no cropping). */
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  object-fit: cover;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
   z-index: 0;
   background: #000;
   pointer-events: none;
@@ -21,8 +21,8 @@ html, body {
 
 #cvCanvas {
   position: fixed;
-  inset: 0;
-  margin: auto;
+  left: 0;
+  top: 0;
   z-index: 1;
   pointer-events: none; /* IMPORTANT: keeps button clickable */
 
@@ -38,10 +38,10 @@ html, body {
 
 #threeCanvas {
   position: fixed;
-  top: 0;
   left: 0;
-  width: 100vw;
-  height: 100vh;
+  top: 0;
+  width: 1px;
+  height: 1px;
   z-index: 2;
   background: transparent;
   pointer-events: none;

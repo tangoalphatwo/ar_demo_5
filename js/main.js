@@ -207,6 +207,40 @@ function scaleModelToRoughMarkerSize(ar, object3d, markerMeters) {
   object3d.scale.setScalar(s);
 }
 
+function computeContainRect(srcW, srcH, dstW, dstH) {
+  const sw = Number(srcW);
+  const sh = Number(srcH);
+  const dw = Number(dstW);
+  const dh = Number(dstH);
+  if (!isFinite(sw) || !isFinite(sh) || !isFinite(dw) || !isFinite(dh) || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) {
+    return { x: 0, y: 0, w: dw || 1, h: dh || 1, scale: 1 };
+  }
+  const scale = Math.min(dw / sw, dh / sh);
+  const w = sw * scale;
+  const h = sh * scale;
+  const x = (dw - w) * 0.5;
+  const y = (dh - h) * 0.5;
+  return { x, y, w, h, scale };
+}
+
+function applyViewRect({ videoEl, threeCanvas, cvCanvas }) {
+  if (!videoEl || !threeCanvas || !cvCanvas) return;
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  const rect = computeContainRect(vw, vh, window.innerWidth, window.innerHeight);
+
+  // Size/position the visible background video and both canvases identically.
+  const px = (n) => `${Math.round(n)}px`;
+  for (const el of [videoEl, threeCanvas, cvCanvas]) {
+    el.style.left = px(rect.x);
+    el.style.top = px(rect.y);
+    el.style.width = px(rect.w);
+    el.style.height = px(rect.h);
+  }
+
+  return rect;
+}
+
 window.addEventListener('load', () => {
   const startBtn = document.getElementById('startBtn');
   const debugToggle = document.getElementById('debugToggle');
@@ -284,9 +318,17 @@ window.addEventListener('load', () => {
       // Camera background is provided by #cvCanvas (drawn each frame).
       // Three is rendered with a transparent clear color over it.
 
-      // Keep Three sized to viewport
-      const onResize = () => ar.resize();
+      // Keep video/canvases aligned (contain-fit) and keep Three sized to that rect.
+      const doLayout = () => {
+        const rect = applyViewRect({ videoEl: cameraHandle.videoEl, threeCanvas, cvCanvas: cameraHandle.cvCanvas });
+        ar.resize();
+        return rect;
+      };
+      doLayout();
+
+      const onResize = () => doLayout();
       window.addEventListener('resize', onResize, { passive: true });
+      window.addEventListener('orientationchange', onResize, { passive: true });
 
       // Pose init for solvePnP
       initPose(cameraHandle.videoEl, cv);
