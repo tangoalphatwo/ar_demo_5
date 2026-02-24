@@ -278,8 +278,8 @@ window.addEventListener('load', () => {
       threeCanvas.style.display = 'block';
 
       ar = new ARRenderer(threeCanvas);
-      // Provide video background
-      ar.setVideoTexture(cameraHandle.videoEl);
+      // Camera background is provided by #cvCanvas (drawn each frame).
+      // Three is rendered with a transparent clear color over it.
 
       // Keep Three sized to viewport
       const onResize = () => ar.resize();

@@ -22,6 +22,8 @@ export class ARRenderer {
     });
     this.renderer.setSize(w0, h0, false);
     if ('SRGBColorSpace' in THREE) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Ensure the WebGL canvas stays transparent so the underlying camera canvas shows through.
+    this.renderer.setClearColor(0x000000, 0);
 
     // Ambient light
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.0));
