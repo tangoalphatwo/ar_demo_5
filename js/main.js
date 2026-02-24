@@ -232,7 +232,8 @@ window.addEventListener('load', () => {
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
   const MODEL_URL = 'model/Avocado2.glb';
-  const MODEL_SCALE_FACTOR = .05;
+  // 1.0 => roughly marker-sized (~10cm). If you want smaller/larger, tweak this.
+  const MODEL_SCALE_FACTOR = 1.0;
   const MARKER_MIN_AREA_FRAC = 0.005;
 
   if (debugToggle) {
@@ -394,7 +395,11 @@ window.addEventListener('load', () => {
         if (worldLocked && ar && !houseLoaded && !houseLoading) {
           houseLoading = true;
           setStatus('Loading model…');
-          console.log('[Model] Loading', MODEL_URL);
+          console.log('[Model] Loading', MODEL_URL, {
+            markerMeters: MARKER_SIZE_METERS,
+            modelScaleFactor: MODEL_SCALE_FACTOR,
+            targetMeters: MARKER_SIZE_METERS * MODEL_SCALE_FACTOR
+          });
           ar.loadGLB(MODEL_URL)
             .then((gltf) => {
               // Normalize model transform so it's more likely to be visible:
