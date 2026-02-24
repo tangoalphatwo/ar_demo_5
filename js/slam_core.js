@@ -9,10 +9,10 @@ export class SlamCore {
         };
 
         this.initialized = false;
+        // 2D debug points (e.g., corners or edge dots)
         this.mapPoints = [];
         // 3D points triangulated from matched features (in camera coordinates)
         this.mapPoints3D = [];
-        this.gray = null;
         this.currGray = null;
         this.prevGray = null;
         this.prevPoints = null;
@@ -21,14 +21,24 @@ export class SlamCore {
         this.lastDelta = null;
     }
 
+    dispose() {
+        if (this.currGray) this.currGray.delete();
+        if (this.prevGray) this.prevGray.delete();
+        if (this.prevPoints) this.prevPoints.delete();
+        if (this.pose?.R) this.pose.R.delete?.();
+        if (this.pose?.t) this.pose.t.delete?.();
+        this.currGray = null;
+        this.prevGray = null;
+        this.prevPoints = null;
+    }
+
     _ensureMats(width, height) {
-        if (!this.gray) {
-            this.gray = new this.cv.Mat(height, width, this.cv.CV_8UC1);
+        if (!this.currGray) {
             this.currGray = new this.cv.Mat(height, width, this.cv.CV_8UC1);
         }
     }
 
-    processFrame(imageData) {
+    processFrame(imageData, { detectEdges = false, maxEdgePoints = 600 } = {}) {
         const cv = this.cv;
 
         // default: no delta this frame
@@ -43,12 +53,57 @@ export class SlamCore {
         cv.cvtColor(rgbaMat, this.currGray, cv.COLOR_RGBA2GRAY);
         rgbaMat.delete();
 
+        let edgePoints2D = null;
+        if (detectEdges && cv.Canny) {
+            const blurred = new cv.Mat();
+            const edges = new cv.Mat();
+            try {
+                cv.GaussianBlur(this.currGray, blurred, new cv.Size(5, 5), 0);
+                cv.Canny(blurred, edges, 50, 150);
+
+                // Sample edge pixels into a manageable list for drawing.
+                // Strategy: stride over pixels, take strong edges.
+                const pts = [];
+                const w = edges.cols;
+                const h = edges.rows;
+                const data = edges.data;
+                // Coarse stride; increased if too many points.
+                let stride = 6;
+                const budget = Math.max(50, maxEdgePoints | 0);
+
+                // Adaptive stride based on budget vs image size.
+                const approxSamples = (w / stride) * (h / stride);
+                if (approxSamples > budget * 8) stride = 10;
+                if (approxSamples > budget * 20) stride = 14;
+
+                for (let y = 0; y < h; y += stride) {
+                    const rowOff = y * w;
+                    for (let x = 0; x < w; x += stride) {
+                        if (data[rowOff + x] !== 0) {
+                            pts.push({ x, y });
+                            if (pts.length >= budget) break;
+                        }
+                    }
+                    if (pts.length >= budget) break;
+                }
+
+                edgePoints2D = pts;
+                // For debug drawing convenience
+                this.mapPoints = pts;
+            } finally {
+                blurred.delete();
+                edges.delete();
+            }
+        }
+
         if (!this.initialized) {
+            if (this.prevGray) this.prevGray.delete();
             this.prevGray = this.currGray.clone();
+            if (this.prevPoints) this.prevPoints.delete();
             this.prevPoints = this._detectFeatures(this.prevGray);
             this.initialized = true;
 
-            return { pose: this.pose, mapPoints: this.mapPoints };
+            return { pose: this.pose, mapPoints: this.mapPoints, edgePoints2D };
         }
 
         const { currPoints, status } = this._trackFeatures(
@@ -73,10 +128,15 @@ export class SlamCore {
             }
         }
 
+        status.delete();
+
         if (goodPrev.length < 16) {
+            currPoints.delete();
+            if (this.prevGray) this.prevGray.delete();
             this.prevGray = this.currGray.clone();
+            if (this.prevPoints) this.prevPoints.delete();
             this.prevPoints = this._detectFeatures(this.prevGray);
-            return { pose: this.pose, mapPoints: this.mapPoints };
+            return { pose: this.pose, mapPoints: this.mapPoints, edgePoints2D };
         }
 
         const prevMat = cv.matFromArray(
@@ -92,6 +152,8 @@ export class SlamCore {
             cv.CV_32FC2,
             goodCurr
         );
+
+        currPoints.delete();
 
         const fx = 600, fy = 600;
         const cx = width / 2, cy = height / 2;
@@ -142,8 +204,22 @@ export class SlamCore {
                     this.lastDelta = { R: rArr.slice(0, 9), t: tArr.slice(0, 3) };
                 }
 
-                this.pose.R = R.mul(this.pose.R);
-                this.pose.t = this._addTrans(this.pose.t, t);
+                // Update pose Mats without leaking previous allocations
+                try {
+                    const nextR = R.mul(this.pose.R);
+                    this.pose.R.delete?.();
+                    this.pose.R = nextR;
+                } catch {
+                    // ignore pose update failures
+                }
+
+                try {
+                    const nextT = this._addTrans(this.pose.t, t);
+                    this.pose.t.delete?.();
+                    this.pose.t = nextT;
+                } catch {
+                    // ignore pose update failures
+                }
 
                 // Triangulate matched points into 3D (camera1 coordinate system)
                 this.mapPoints3D = [];
@@ -213,14 +289,18 @@ export class SlamCore {
                     console.warn('Triangulation failed:', err);
                 }
 
+                if (this.prevGray) this.prevGray.delete();
                 this.prevGray = this.currGray.clone();
+                if (this.prevPoints) this.prevPoints.delete();
                 this.prevPoints = currMat.clone();
 
             } catch (err) {
                 console.warn('recoverPose failed:', err);
                 // Keep previous pose and skip triangulation for this frame
                 this.mapPoints3D = [];
+                if (this.prevGray) this.prevGray.delete();
                 this.prevGray = this.currGray.clone();
+                if (this.prevPoints) this.prevPoints.delete();
                 this.prevPoints = currMat.clone();
             }
 
@@ -229,14 +309,20 @@ export class SlamCore {
             // No essential matrix computed; skip pose update and triangulation this frame
             console.warn('Skipping pose recovery: no essential/fundamental computation available for this frame');
             this.mapPoints3D = [];
+            if (this.prevGray) this.prevGray.delete();
             this.prevGray = this.currGray.clone();
+            if (this.prevPoints) this.prevPoints.delete();
             this.prevPoints = currMat.clone();
         }
 
         if (mask && mask.delete) mask.delete();
         if (prevMat && prevMat.delete) prevMat.delete();
+        if (currMat && currMat.delete) currMat.delete();
+        if (K && K.delete) K.delete();
+        R.delete();
+        t.delete();
 
-        return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D, delta: this.lastDelta };
+        return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D, delta: this.lastDelta, edgePoints2D };
     }
 
     _addTrans(t1, t2) {

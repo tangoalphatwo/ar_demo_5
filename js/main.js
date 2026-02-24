@@ -1,9 +1,18 @@
 // main.js
-// Minimal bootstrap: Start button -> start camera preview + wait for OpenCV + log sanity checks
+// Start button -> start camera + wait for OpenCV -> run SLAM per frame
+
+import { SlamCore } from './slam_core.js';
+import { PlaneDetector } from './plane_detector.js';
 
 function setStatus(text) {
   const statusEl = document.getElementById('status');
   if (statusEl) statusEl.textContent = text;
+}
+
+function setDebugInfo(text) {
+  const el = document.getElementById('debugInfo');
+  if (!el) return;
+  el.textContent = text;
 }
 
 function makeNonThenable(cvObj) {
@@ -133,19 +142,13 @@ async function startCameraPreview() {
   cvCanvas.width = vw;
   cvCanvas.height = vh;
 
-  const ctx = cvCanvas.getContext('2d', { alpha: false, desynchronized: true });
-
-  let running = true;
-  const draw = () => {
-    if (!running) return;
-    ctx.drawImage(videoEl, 0, 0, cvCanvas.width, cvCanvas.height);
-    requestAnimationFrame(draw);
-  };
-  requestAnimationFrame(draw);
+  const ctx = cvCanvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: true });
 
   return {
+    videoEl,
+    cvCanvas,
+    ctx,
     stop() {
-      running = false;
       try {
         stream.getTracks().forEach((t) => t.stop());
       } catch {
@@ -155,11 +158,46 @@ async function startCameraPreview() {
   };
 }
 
+function drawGreenDots(ctx, points, { radius = 2 } = {}) {
+  if (!points || points.length === 0) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 255, 0, 0.9)';
+  for (const p of points) {
+    const x = p.x | 0;
+    const y = p.y | 0;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 window.addEventListener('load', () => {
   const startBtn = document.getElementById('startBtn');
+  const debugToggle = document.getElementById('debugToggle');
   if (!startBtn) {
     console.warn('Start button not found');
     return;
+  }
+
+  let running = false;
+  let debugEnabled = false;
+  let slam = null;
+  let planeDetector = null;
+  let cameraHandle = null;
+
+  if (debugToggle) {
+    debugToggle.hidden = false;
+    debugToggle.addEventListener('click', () => {
+      debugEnabled = !debugEnabled;
+      debugToggle.setAttribute('aria-pressed', String(debugEnabled));
+      debugToggle.textContent = debugEnabled ? 'Hide Debug' : 'Show Debug';
+      const debugInfoEl = document.getElementById('debugInfo');
+      if (debugInfoEl) {
+        debugInfoEl.hidden = !debugEnabled;
+        debugInfoEl.setAttribute('aria-hidden', String(!debugEnabled));
+      }
+    });
   }
 
   startBtn.addEventListener('click', async () => {
@@ -170,19 +208,73 @@ window.addEventListener('load', () => {
     console.log('[Boot] window.cv type:', typeof window.cv);
 
     try {
-      const [cameraHandle, cv] = await Promise.all([
+      const [camHandle, cv] = await Promise.all([
         startCameraPreview(),
         waitForOpenCV({ timeoutMs: 20000 })
       ]);
+
+      cameraHandle = camHandle;
 
       // Handy for DevTools
       window.__cameraHandle = cameraHandle;
       window.cvInstance = cv;
 
-      setStatus('Camera running + OpenCV ready (see console)');
+      slam = new SlamCore(cv);
+      planeDetector = new PlaneDetector({
+        ransacIters: 250,
+        inlierThreshold: 0.08,
+        minInliers: 50
+      });
+
+      setStatus('Running');
       console.log('[Boot] Camera running');
       console.log('[Boot] OpenCV ready');
       logOpenCVInfo(cv);
+
+      running = true;
+      const { videoEl, cvCanvas, ctx } = cameraHandle;
+      const tick = () => {
+        if (!running) return;
+
+        // Draw current video frame
+        ctx.drawImage(videoEl, 0, 0, cvCanvas.width, cvCanvas.height);
+
+        // Run SLAM + optional edge extraction
+        const imageData = ctx.getImageData(0, 0, cvCanvas.width, cvCanvas.height);
+        const result = slam.processFrame(imageData, {
+          detectEdges: debugEnabled,
+          maxEdgePoints: 700
+        });
+
+        // Debug overlay: green edge dots
+        if (debugEnabled && result?.edgePoints2D) {
+          drawGreenDots(ctx, result.edgePoints2D, { radius: 2 });
+        }
+
+        // Plane detection on triangulated 3D points
+        let dbg = '';
+        const pts3D = result?.mapPoints3D || [];
+        dbg += `2D edges: ${result?.edgePoints2D ? result.edgePoints2D.length : 0}\n`;
+        dbg += `3D points: ${pts3D.length}\n`;
+        if (pts3D.length >= 80 && planeDetector) {
+          const plane = planeDetector.detect(pts3D);
+          if (plane) {
+            const n = plane.normal;
+            dbg += `Plane inliers: ${plane.inliers.length}\n`;
+            dbg += `Plane n: (${n.x.toFixed(3)}, ${n.y.toFixed(3)}, ${n.z.toFixed(3)})\n`;
+            dbg += `Plane d: ${plane.d.toFixed(3)}\n`;
+          } else {
+            dbg += 'Plane: (none)\n';
+          }
+        } else {
+          dbg += 'Plane: (need more 3D points)\n';
+        }
+        if (debugEnabled) setDebugInfo(dbg);
+
+        requestAnimationFrame(tick);
+      };
+
+      requestAnimationFrame(tick);
     } catch (e) {
       setStatus('Startup failed (see console)');
       console.error('[Boot] Startup failed:', e);
