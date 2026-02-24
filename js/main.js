@@ -394,10 +394,11 @@ window.addEventListener('load', () => {
           const s = MARKER_SIZE_METERS;
           const half = s * 0.5;
           const objectPoints = [
-            { x: -half, y: -half, z: 0 },
-            { x: half, y: -half, z: 0 },
+            // World/marker coords: X right, Y up, Z out of the marker plane.
+            { x: -half, y: half, z: 0 },
             { x: half, y: half, z: 0 },
-            { x: -half, y: half, z: 0 }
+            { x: half, y: -half, z: 0 },
+            { x: -half, y: -half, z: 0 }
           ];
 
           const pose = estimatePose(quad.corners, objectPoints, cv);
