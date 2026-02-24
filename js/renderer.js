@@ -8,11 +8,12 @@ export class ARRenderer {
 
     this.scene = new THREE.Scene();
 
-    const fov = 60;
+    // Fallback FOV; call setProjectionFromVideo() after camera starts for better alignment.
+    const fov = 80;
     const w0 = canvasEl.clientWidth || window.innerWidth || 1;
     const h0 = canvasEl.clientHeight || window.innerHeight || 1;
     const aspect = w0 / h0;
-    this.camera = new THREE.PerspectiveCamera(fov, aspect, 0.01, 100);
+    this.camera = new THREE.PerspectiveCamera(fov, aspect, 0.001, 500);
     this.camera.position.set(0, 0, 0);
 
     this.renderer = new THREE.WebGLRenderer({
@@ -42,6 +43,28 @@ export class ARRenderer {
     this.scene.add(this.anchor);
 
     this.model = null;
+
+    this._projectionInfo = null;
+  }
+
+  // Align Three camera FOV with our (approximate) OpenCV intrinsics.
+  // In pose.js we use focalLengthPx = videoWidthPx.
+  setProjectionFromVideo({ videoWidthPx, videoHeightPx, focalLengthPx } = {}) {
+    const w = Number(videoWidthPx);
+    const h = Number(videoHeightPx);
+    const f = Number(focalLengthPx);
+    if (!isFinite(w) || !isFinite(h) || !isFinite(f) || w <= 0 || h <= 0 || f <= 0) return;
+
+    // fovY = 2 * atan( (h/2) / fy )
+    const fovRad = 2 * Math.atan((h * 0.5) / f);
+    const fovDeg = (fovRad * 180) / Math.PI;
+
+    if (isFinite(fovDeg) && fovDeg > 10 && fovDeg < 170) {
+      this.camera.fov = fovDeg;
+      this.camera.updateProjectionMatrix();
+      this._projectionInfo = { videoWidthPx: w, videoHeightPx: h, focalLengthPx: f, fovDeg };
+      console.log('[Three] Projection updated from video:', this._projectionInfo);
+    }
   }
 
   setVideoTexture(video) {
