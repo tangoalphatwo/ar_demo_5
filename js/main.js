@@ -227,9 +227,12 @@ window.addEventListener('load', () => {
   let worldLocked = false;
   let lastMarkerPose = null;
   let houseLoaded = false;
+  let houseLoading = false;
+  let lastMarkerLogMs = 0;
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
   const HOUSE_SCALE_FACTOR = 0.5; // <1 makes the house smaller
+  const MARKER_MIN_AREA_FRAC = 0.005;
 
   if (debugToggle) {
     debugToggle.hidden = false;
@@ -330,7 +333,7 @@ window.addEventListener('load', () => {
         // Marker detection → solvePnP → camera pose
         // - Before lock: used to establish world origin and initial camera pose
         // - After lock: may be used to update camera pose ONLY if SLAM pose recovery isn't available
-        const quad = detectMarkerQuad(cv, gray);
+        const quad = detectMarkerQuad(cv, gray, { minAreaFrac: MARKER_MIN_AREA_FRAC });
         if (quad?.corners) {
           const s = MARKER_SIZE_METERS;
           const half = s * 0.5;
@@ -357,6 +360,7 @@ window.addEventListener('load', () => {
                 worldLocked = true;
                 appState = 'WORLD_LOCKED';
                 setStatus('World locked');
+                console.log('[Marker] World locked');
               } else {
                 setStatus('Detecting marker…');
               }
@@ -369,10 +373,24 @@ window.addEventListener('load', () => {
           if (!worldLocked) setStatus('Point at marker');
         }
 
+        // Throttled marker debug log (helps diagnose “model never loads”)
+        const nowMs = performance.now();
+        if (nowMs - lastMarkerLogMs > 1200) {
+          lastMarkerLogMs = nowMs;
+          console.log('[Marker] quad:', quad ? 'yes' : 'no', {
+            state: appState,
+            worldLocked,
+            markerLockFrames,
+            minAreaFrac: MARKER_MIN_AREA_FRAC,
+            area: quad?.area
+          });
+        }
+
         // Once world is locked, spawn the house at world origin (only once)
-        if (worldLocked && ar && !houseLoaded) {
-          houseLoaded = true;
+        if (worldLocked && ar && !houseLoaded && !houseLoading) {
+          houseLoading = true;
           setStatus('Loading model…');
+          console.log('[Model] Loading model/house.glb');
           ar.loadGLB('model/house.glb')
             .then((gltf) => {
               // Add model to anchor (world origin)
@@ -383,10 +401,15 @@ window.addEventListener('load', () => {
               scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS * HOUSE_SCALE_FACTOR);
 
               setStatus('Running');
+              houseLoaded = true;
+              houseLoading = false;
+              console.log('[Model] Loaded and added to scene');
             })
             .catch((err) => {
               console.error('[Model] loadGLB failed:', err);
               setStatus('Model load failed (see console)');
+              houseLoading = false;
+              houseLoaded = false;
             });
         }
 
