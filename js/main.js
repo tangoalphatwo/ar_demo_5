@@ -232,7 +232,7 @@ window.addEventListener('load', () => {
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
   const MODEL_URL = 'model/Avocado2.glb';
-  const MODEL_SCALE_FACTOR = .05; // <1 smaller, >1 larger
+  const MODEL_SCALE_FACTOR = .05;
   const MARKER_MIN_AREA_FRAC = 0.005;
 
   if (debugToggle) {
