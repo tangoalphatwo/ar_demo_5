@@ -6,7 +6,6 @@
   <title>SLAM-Lite</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <link rel="stylesheet" href="style.css" />
-  <!-- Three.js is imported as an ES module inside js/renderer.js -->
 
   <script>
     // OpenCV loader config
@@ -57,17 +56,9 @@
   <!-- Canvas for OpenCV processing -->
   <canvas id="cvCanvas"></canvas>
 
-  <!-- Canvas for Three.js rendering -->
-  <canvas id="threeCanvas"></canvas>
-
   <div id="ui">
     <button id="startBtn">Start AR</button>
-    <button id="debugToggle" aria-pressed="false" hidden>Show Debug</button>
     <div id="status">Idle</div>
   </div>
-
-  <div id="toast" hidden aria-hidden="true"></div>
-
-  <div id="debugInfo" aria-hidden="true" hidden></div>
 </body>
 </html>

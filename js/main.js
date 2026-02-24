@@ -1,12 +1,9 @@
 // main.js
 // Start button -> start camera + wait for OpenCV -> run SLAM per frame
 
-import { ARRenderer } from './renderer.js';
 import { initPose, estimatePose } from './pose.js';
 import { detectMarkerQuad } from './marker_quad.js';
-import { SlamCore } from './slam_core.js';
-import { createDebugUI, createThrottle, drawGreenDots, drawQuad, logOpenCVInfo } from './debug.js';
-import { applyViewRect, setStatus } from './ui.js';
+import { setStatus } from './ui.js';
 
 function makeNonThenable(cvObj) {
   if (!cvObj) return cvObj;
@@ -53,22 +50,12 @@ async function waitForOpenCV({ timeoutMs = 20000 } = {}) {
 }
 
 
-function getSlamPoseRecoveryAvailable(cv) {
-  const hasEorF = typeof cv.findEssentialMat === 'function' || typeof cv.findFundamentalMat === 'function';
-  const hasRecover = typeof cv.recoverPose === 'function';
-  return hasEorF && hasRecover;
-}
-
 async function startCameraPreview() {
   const videoEl = document.getElementById('camera');
   const cvCanvas = document.getElementById('cvCanvas');
-  const threeCanvas = document.getElementById('threeCanvas');
 
   if (!videoEl) throw new Error('Missing #camera element');
   if (!cvCanvas) throw new Error('Missing #cvCanvas element');
-
-  // Ensure preview is visible
-  if (threeCanvas) threeCanvas.style.display = 'none';
 
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
@@ -114,29 +101,56 @@ async function startCameraPreview() {
   };
 }
 
+function drawDot(ctx, x, y, { radius = 6, color = 'rgba(255, 0, 0, 0.95)' } = {}) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function averageCorner(corners) {
+  let sx = 0;
+  let sy = 0;
+  for (const c of corners) {
+    sx += c.x;
+    sy += c.y;
+  }
+  return { x: sx / corners.length, y: sy / corners.length };
+}
+
+function radToDeg(r) {
+  return (r * 180) / Math.PI;
+}
+
+function createThrottle(intervalMs) {
+  let last = 0;
+  return (now = performance.now()) => {
+    if (now - last >= intervalMs) {
+      last = now;
+      return true;
+    }
+    return false;
+  };
+}
+
 
 window.addEventListener('load', () => {
   const startBtn = document.getElementById('startBtn');
-  const debugToggle = document.getElementById('debugToggle');
-  const debugInfoEl = document.getElementById('debugInfo');
   if (!startBtn) {
     console.warn('Start button not found');
     return;
   }
 
   let running = false;
-  let slam = null;
   let cameraHandle = null;
-  let ar = null;
-
-  const debugUI = createDebugUI({ debugToggleEl: debugToggle, debugInfoEl });
+  const poseLogThrottle = createThrottle(250);
   const markerLogThrottle = createThrottle(1200);
 
   // Marker-based bootstrap state
-  let appState = 'WAIT_FOR_MARKER';
-  let markerLockFrames = 0;
   let worldLocked = false;
-  let lastMarkerPose = null;
+  let markerSeen = false;
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
   const MARKER_MIN_AREA_FRAC = 0.005;
@@ -155,64 +169,24 @@ window.addEventListener('load', () => {
       ]);
 
       cameraHandle = camHandle;
-      debugUI.attachCvCanvas(cameraHandle.cvCanvas);
 
       // Handy for DevTools
       window.__cameraHandle = cameraHandle;
       window.cvInstance = cv;
 
-      // Renderer setup (Three.js)
-      const threeCanvas = document.getElementById('threeCanvas');
-      if (!threeCanvas) throw new Error('Missing #threeCanvas element');
-      threeCanvas.style.display = 'block';
-
-      ar = new ARRenderer(threeCanvas);
-      // Camera background is provided by #cvCanvas (drawn each frame).
-      // Three is rendered with a transparent clear color over it.
-
-      // Keep video/canvases aligned (contain-fit) and keep Three sized to that rect.
-      const doLayout = () => {
-        const rect = applyViewRect({ videoEl: cameraHandle.videoEl, threeCanvas, cvCanvas: cameraHandle.cvCanvas });
-        ar.resize();
-        return rect;
-      };
-      doLayout();
-
-      const onResize = () => doLayout();
-      window.addEventListener('resize', onResize, { passive: true });
-      window.addEventListener('orientationchange', onResize, { passive: true });
-
       // Pose init for solvePnP
       initPose(cameraHandle.videoEl, cv);
-
-      // Match Three camera projection to the same simple intrinsics used by solvePnP.
-      // pose.js currently uses focalLengthPx = max(videoWidthPx, videoHeightPx).
-      const focalLengthPx = Math.max(cameraHandle.videoEl.videoWidth, cameraHandle.videoEl.videoHeight);
-      ar.setProjectionFromVideo({
-        videoWidthPx: cameraHandle.videoEl.videoWidth,
-        videoHeightPx: cameraHandle.videoEl.videoHeight,
-        focalLengthPx
-      });
-
-      slam = new SlamCore(cv);
 
       setStatus('Running');
       console.log('[Boot] Camera running');
       console.log('[Boot] OpenCV ready');
-      logOpenCVInfo(cv);
-
-      const slamPoseAvailable = getSlamPoseRecoveryAvailable(cv);
-      if (!slamPoseAvailable) {
-        console.warn('[SLAM] Pose recovery not available in this OpenCV.js build; marker bootstrap will still work.');
-      }
+      console.log('[World] Marker coordinate system: origin is marker center (0,0,0)');
 
       running = true;
       const { videoEl, cvCanvas, ctx } = cameraHandle;
 
       const tick = () => {
         if (!running) return;
-
-        const debugEnabled = debugUI.isEnabled();
 
         // Draw current video frame
         ctx.drawImage(videoEl, 0, 0, cvCanvas.width, cvCanvas.height);
@@ -226,13 +200,14 @@ window.addEventListener('load', () => {
         cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
         rgba.delete();
 
-        let dbg = '';
-
-        // Marker detection → solvePnP → camera pose
-        // - Before lock: used to establish world origin and initial camera pose
-        // - After lock: may be used to update camera pose ONLY if SLAM pose recovery isn't available
+        // Marker detection → solvePnP
         const quad = detectMarkerQuad(cv, gray, { minAreaFrac: MARKER_MIN_AREA_FRAC });
         if (quad?.corners) {
+          if (!markerSeen) {
+            markerSeen = true;
+            console.log('[Marker] detected');
+          }
+
           const s = MARKER_SIZE_METERS;
           const half = s * 0.5;
           const objectPoints = [
@@ -244,32 +219,42 @@ window.addEventListener('load', () => {
           ];
 
           const pose = estimatePose(quad.corners, objectPoints, cv);
-          if (pose && ar) {
-            lastMarkerPose = pose;
 
-            // Update camera pose from marker if we're still bootstrapping,
-            // or if SLAM pose recovery isn't available yet.
-            if (!worldLocked || !getSlamPoseRecoveryAvailable(cv)) {
-              ar.setCameraFromMarkerPose(pose);
-            }
-
-            if (!worldLocked) {
-              markerLockFrames++;
-              if (markerLockFrames >= 8) {
-                worldLocked = true;
-                appState = 'WORLD_LOCKED';
-                setStatus('World locked');
-                console.log('[Marker] World locked');
-              } else {
-                setStatus('Detecting marker…');
-              }
-            }
+          // Step 4: world zero is the marker center (object points are centered at origin).
+          // We "lock" once we have a valid pose.
+          if (pose && !worldLocked) {
+            worldLocked = true;
+            setStatus('World locked');
+            console.log('[World] zero set at marker center');
+          } else if (!worldLocked) {
+            setStatus('Detecting marker…');
           }
 
-          if (debugEnabled) drawQuad(ctx, quad.corners);
+          // Step 5: red dot at marker center (image coordinates)
+          const c = averageCorner(quad.corners);
+          drawDot(ctx, c.x, c.y);
+          if (markerLogThrottle()) {
+            console.log('[Marker] center dot placed', { x: c.x, y: c.y });
+          }
+
+          // Step 6: distance + rotation from pose
+          if (pose && worldLocked && poseLogThrottle()) {
+            const p = pose.position;
+            const d = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+            const r = pose.rotation;
+            console.log('[Pose] distance(m):', d, 'rotation(deg):', {
+              yaw: radToDeg(r.yaw),
+              pitch: radToDeg(r.pitch),
+              roll: radToDeg(r.roll)
+            }, 't(m):', p);
+          }
         } else {
-          markerLockFrames = 0;
-          if (!worldLocked) setStatus('Point at marker');
+          if (markerSeen) {
+            markerSeen = false;
+            console.log('[Marker] lost');
+          }
+
+          setStatus('Point at marker');
         }
 
         // Throttled marker debug log (helps diagnose “model never loads”)
@@ -283,33 +268,7 @@ window.addEventListener('load', () => {
           });
         }
 
-        // If marker is lost after lock and SLAM isn't ready, hold last pose.
-        if (worldLocked && !getSlamPoseRecoveryAvailable(cv) && lastMarkerPose && ar) {
-          // ar already has last pose; nothing to do.
-          dbg += 'Tracking: marker-based only (SLAM pose recovery missing)\n';
-        }
-
-        // Optional SLAM edge dots debug (independent of marker)
-        const slamResult = slam.processFrame(imageData, {
-          detectEdges: debugEnabled,
-          maxEdgePoints: 700
-        });
-        if (debugEnabled && slamResult?.edgePoints2D) {
-          drawGreenDots(ctx, slamResult.edgePoints2D, { radius: 2 });
-        }
-
-        if (debugEnabled) {
-          dbg += `State: ${appState}\n`;
-          dbg += `World locked: ${worldLocked}\n`;
-          dbg += `Marker lock frames: ${markerLockFrames}\n`;
-          dbg += `SLAM pose recovery: ${getSlamPoseRecoveryAvailable(cv)}\n`;
-          debugUI.setDebugText(dbg);
-        }
-
         gray.delete();
-
-        // Render Three
-        if (ar) ar.render();
 
         requestAnimationFrame(tick);
       };
