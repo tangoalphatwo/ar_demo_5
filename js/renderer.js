@@ -105,6 +105,32 @@ export class ARRenderer {
     return { x: size.x, y: size.y, z: size.z };
   }
 
+  getBoundingBox(object3d) {
+    if (!object3d) return null;
+    object3d.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(object3d);
+    return box;
+  }
+
+  centerObject(object3d) {
+    const box = this.getBoundingBox(object3d);
+    if (!box) return null;
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    object3d.position.sub(center);
+    object3d.updateWorldMatrix(true, true);
+    return center;
+  }
+
+  placeOnGround(object3d, { y = 0 } = {}) {
+    const box = this.getBoundingBox(object3d);
+    if (!box) return null;
+    const dy = y - box.min.y;
+    object3d.position.y += dy;
+    object3d.updateWorldMatrix(true, true);
+    return dy;
+  }
+
   setAnchorPose(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) {
       this.anchor.visible = false;

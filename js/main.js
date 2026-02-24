@@ -397,12 +397,22 @@ window.addEventListener('load', () => {
           console.log('[Model] Loading', MODEL_URL);
           ar.loadGLB(MODEL_URL)
             .then((gltf) => {
+              // Normalize model transform so it's more likely to be visible:
+              // - Center it at origin (some GLBs have far-away origins)
+              // - Scale to marker size
+              // - Place it on the marker plane (y=0)
+              ar.centerObject(gltf.scene);
+              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS * MODEL_SCALE_FACTOR);
+              ar.placeOnGround(gltf.scene, { y: 0 });
+
+              const sizeAfter = ar.computeBoundingSize(gltf.scene);
+              console.log('[Model] Bounds after normalize:', sizeAfter, {
+                markerMeters: MARKER_SIZE_METERS,
+                modelScaleFactor: MODEL_SCALE_FACTOR
+              });
+
               // Add model to anchor (world origin)
               ar.anchor.add(gltf.scene);
-
-              // Scale model to be roughly marker-sized
-              // Note: Uses Three's unit scale; we treat it as meters.
-              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS * MODEL_SCALE_FACTOR);
 
               setStatus('Running');
               houseLoaded = true;
