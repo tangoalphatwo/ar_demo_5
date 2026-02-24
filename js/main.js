@@ -1,8 +1,10 @@
 // main.js
 // Start button -> start camera + wait for OpenCV -> run SLAM per frame
 
+import { ARRenderer } from './renderer.js';
+import { initPose, estimatePose } from './pose.js';
+import { detectMarkerQuad } from './marker_quad.js';
 import { SlamCore } from './slam_core.js';
-import { PlaneDetector } from './plane_detector.js';
 
 function setStatus(text) {
   const statusEl = document.getElementById('status');
@@ -105,25 +107,10 @@ function logOpenCVInfo(cv) {
   }
 }
 
-function assertOpenCvCapabilities(cv) {
-  const requireCalib3d = (window.__OPENCV_CONFIG && window.__OPENCV_CONFIG.requireCalib3d) ?? true;
-  if (!requireCalib3d) return;
-
-  const missing = [];
-  if (typeof cv.findEssentialMat !== 'function') missing.push('findEssentialMat');
-  if (typeof cv.findFundamentalMat !== 'function') missing.push('findFundamentalMat');
-  if (typeof cv.recoverPose !== 'function') missing.push('recoverPose');
-
-  // We accept either essential OR fundamental, but recoverPose is required.
+function getSlamPoseRecoveryAvailable(cv) {
   const hasEorF = typeof cv.findEssentialMat === 'function' || typeof cv.findFundamentalMat === 'function';
   const hasRecover = typeof cv.recoverPose === 'function';
-  if (!hasEorF || !hasRecover) {
-    const msg =
-      'OpenCV.js build is missing calib3d pose recovery. ' +
-      'Need recoverPose and (findEssentialMat or findFundamentalMat). ' +
-      (missing.length ? `Missing: ${missing.join(', ')}` : '');
-    throw new Error(msg);
-  }
+  return hasEorF && hasRecover;
 }
 
 async function startCameraPreview() {
@@ -195,6 +182,31 @@ function drawGreenDots(ctx, points, { radius = 2 } = {}) {
   ctx.restore();
 }
 
+function drawQuad(ctx, corners, { color = 'rgba(255, 255, 0, 0.9)', width = 4 } = {}) {
+  if (!corners || corners.length !== 4) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  ctx.lineTo(corners[1].x, corners[1].y);
+  ctx.lineTo(corners[2].x, corners[2].y);
+  ctx.lineTo(corners[3].x, corners[3].y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function scaleModelToRoughMarkerSize(ar, object3d, markerMeters) {
+  if (!ar || !object3d) return;
+  const size = ar.computeBoundingSize(object3d);
+  if (!size) return;
+  const maxDim = Math.max(size.x, size.y, size.z);
+  if (!isFinite(maxDim) || maxDim <= 1e-6) return;
+  const s = markerMeters / maxDim;
+  object3d.scale.setScalar(s);
+}
+
 window.addEventListener('load', () => {
   const startBtn = document.getElementById('startBtn');
   const debugToggle = document.getElementById('debugToggle');
@@ -206,8 +218,17 @@ window.addEventListener('load', () => {
   let running = false;
   let debugEnabled = false;
   let slam = null;
-  let planeDetector = null;
   let cameraHandle = null;
+  let ar = null;
+
+  // Marker-based bootstrap state
+  let appState = 'WAIT_FOR_MARKER';
+  let markerLockFrames = 0;
+  let worldLocked = false;
+  let lastMarkerPose = null;
+  let houseLoaded = false;
+
+  const MARKER_SIZE_METERS = 0.1016; // 4 inches
 
   if (debugToggle) {
     debugToggle.hidden = false;
@@ -219,6 +240,11 @@ window.addEventListener('load', () => {
       if (debugInfoEl) {
         debugInfoEl.hidden = !debugEnabled;
         debugInfoEl.setAttribute('aria-hidden', String(!debugEnabled));
+      }
+
+      // If the camera has started, bring the cv canvas above/below Three.
+      if (cameraHandle?.cvCanvas) {
+        cameraHandle.cvCanvas.style.zIndex = debugEnabled ? '3' : '1';
       }
     });
   }
@@ -242,64 +268,154 @@ window.addEventListener('load', () => {
       window.__cameraHandle = cameraHandle;
       window.cvInstance = cv;
 
+      // Renderer setup (Three.js)
+      const threeCanvas = document.getElementById('threeCanvas');
+      if (!threeCanvas) throw new Error('Missing #threeCanvas element');
+      threeCanvas.style.display = 'block';
+
+      ar = new ARRenderer(threeCanvas);
+      // Provide video background
+      ar.setVideoTexture(cameraHandle.videoEl);
+
+      // Keep Three sized to viewport
+      const onResize = () => ar.resize();
+      window.addEventListener('resize', onResize, { passive: true });
+
+      // Pose init for solvePnP
+      initPose(cameraHandle.videoEl, cv);
+
       slam = new SlamCore(cv);
-      planeDetector = new PlaneDetector({
-        ransacIters: 250,
-        inlierThreshold: 0.08,
-        minInliers: 50
-      });
 
       setStatus('Running');
       console.log('[Boot] Camera running');
       console.log('[Boot] OpenCV ready');
       logOpenCVInfo(cv);
 
-      // Hard-fail early if required APIs are missing.
-      assertOpenCvCapabilities(cv);
+      const slamPoseAvailable = getSlamPoseRecoveryAvailable(cv);
+      if (!slamPoseAvailable) {
+        console.warn('[SLAM] Pose recovery not available in this OpenCV.js build; marker bootstrap will still work.');
+      }
 
       running = true;
       const { videoEl, cvCanvas, ctx } = cameraHandle;
+
+      // Debug overlay canvas visibility stacking
+      const applyDebugCanvasStacking = () => {
+        if (debugEnabled) {
+          cvCanvas.style.zIndex = '3';
+        } else {
+          cvCanvas.style.zIndex = '1';
+        }
+      };
+      applyDebugCanvasStacking();
+
       const tick = () => {
         if (!running) return;
 
         // Draw current video frame
         ctx.drawImage(videoEl, 0, 0, cvCanvas.width, cvCanvas.height);
 
-        // Run SLAM + optional edge extraction
+        // Read pixels once per frame
         const imageData = ctx.getImageData(0, 0, cvCanvas.width, cvCanvas.height);
-        const result = slam.processFrame(imageData, {
+
+        // Grayscale for marker detection
+        const rgba = cv.matFromImageData(imageData);
+        const gray = new cv.Mat();
+        cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
+        rgba.delete();
+
+        let dbg = '';
+
+        // Marker detection → solvePnP → camera pose
+        // - Before lock: used to establish world origin and initial camera pose
+        // - After lock: may be used to update camera pose ONLY if SLAM pose recovery isn't available
+        const quad = detectMarkerQuad(cv, gray);
+        if (quad?.corners) {
+          const s = MARKER_SIZE_METERS;
+          const half = s * 0.5;
+          const objectPoints = [
+            { x: -half, y: -half, z: 0 },
+            { x: half, y: -half, z: 0 },
+            { x: half, y: half, z: 0 },
+            { x: -half, y: half, z: 0 }
+          ];
+
+          const pose = estimatePose(quad.corners, objectPoints, cv);
+          if (pose && ar) {
+            lastMarkerPose = pose;
+
+            // Update camera pose from marker if we're still bootstrapping,
+            // or if SLAM pose recovery isn't available yet.
+            if (!worldLocked || !getSlamPoseRecoveryAvailable(cv)) {
+              ar.setCameraFromMarkerPose(pose);
+            }
+
+            if (!worldLocked) {
+              markerLockFrames++;
+              if (markerLockFrames >= 8) {
+                worldLocked = true;
+                appState = 'WORLD_LOCKED';
+                setStatus('World locked');
+              } else {
+                setStatus('Detecting marker…');
+              }
+            }
+          }
+
+          if (debugEnabled) drawQuad(ctx, quad.corners);
+        } else {
+          markerLockFrames = 0;
+          if (!worldLocked) setStatus('Point at marker');
+        }
+
+        // Once world is locked, spawn the house at world origin (only once)
+        if (worldLocked && ar && !houseLoaded) {
+          houseLoaded = true;
+          setStatus('Loading model…');
+          ar.loadGLB('model/house.glb')
+            .then((gltf) => {
+              // Add model to anchor (world origin)
+              ar.anchor.add(gltf.scene);
+
+              // Scale model to be roughly marker-sized
+              // Note: Uses Three's unit scale; we treat it as meters.
+              scaleModelToRoughMarkerSize(ar, gltf.scene, MARKER_SIZE_METERS);
+
+              setStatus('Running');
+            })
+            .catch((err) => {
+              console.error('[Model] loadGLB failed:', err);
+              setStatus('Model load failed (see console)');
+            });
+        }
+
+        // If marker is lost after lock and SLAM isn't ready, hold last pose.
+        if (worldLocked && !getSlamPoseRecoveryAvailable(cv) && lastMarkerPose && ar) {
+          // ar already has last pose; nothing to do.
+          dbg += 'Tracking: marker-based only (SLAM pose recovery missing)\n';
+        }
+
+        // Optional SLAM edge dots debug (independent of marker)
+        const slamResult = slam.processFrame(imageData, {
           detectEdges: debugEnabled,
           maxEdgePoints: 700
         });
-
-        // Debug overlay: green edge dots
-        if (debugEnabled && result?.edgePoints2D) {
-          drawGreenDots(ctx, result.edgePoints2D, { radius: 2 });
+        if (debugEnabled && slamResult?.edgePoints2D) {
+          drawGreenDots(ctx, slamResult.edgePoints2D, { radius: 2 });
         }
 
-        // Plane detection on triangulated 3D points
-        let dbg = '';
-        const pts3D = result?.mapPoints3D || [];
-        dbg += `2D edges: ${result?.edgePoints2D ? result.edgePoints2D.length : 0}\n`;
-        if (result?.warning === 'pose_recovery_unavailable') {
-          dbg += 'SLAM: pose recovery unavailable (missing findEssentialMat/findFundamentalMat/recoverPose)\n';
-          dbg += 'SLAM: running in 2D tracking-only fallback\n';
+        if (debugEnabled) {
+          dbg += `State: ${appState}\n`;
+          dbg += `World locked: ${worldLocked}\n`;
+          dbg += `Marker lock frames: ${markerLockFrames}\n`;
+          dbg += `SLAM pose recovery: ${getSlamPoseRecoveryAvailable(cv)}\n`;
+          setDebugInfo(dbg);
         }
-        dbg += `3D points: ${pts3D.length}\n`;
-        if (pts3D.length >= 80 && planeDetector) {
-          const plane = planeDetector.detect(pts3D);
-          if (plane) {
-            const n = plane.normal;
-            dbg += `Plane inliers: ${plane.inliers.length}\n`;
-            dbg += `Plane n: (${n.x.toFixed(3)}, ${n.y.toFixed(3)}, ${n.z.toFixed(3)})\n`;
-            dbg += `Plane d: ${plane.d.toFixed(3)}\n`;
-          } else {
-            dbg += 'Plane: (none)\n';
-          }
-        } else {
-          dbg += 'Plane: (need more 3D points)\n';
-        }
-        if (debugEnabled) setDebugInfo(dbg);
+
+        gray.delete();
+
+        // Render Three
+        if (ar) ar.render();
 
         requestAnimationFrame(tick);
       };

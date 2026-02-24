@@ -40,20 +40,12 @@ export class ARRenderer {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.format = THREE.RGBFormat;
-  
-    const geometry = new THREE.PlaneGeometry(2, 2);
-    const material = new THREE.MeshBasicMaterial({ map: texture, depthTest: false, depthWrite: false });
-    const mesh = new THREE.Mesh(geometry, material);
 
-    // Keep background always behind content
-    mesh.renderOrder = -1;
-    mesh.frustumCulled = false;
-    mesh.material.transparent = true;
+    // Most robust: Three handles the full-viewport background.
+    this.scene.background = texture;
 
-    this.bgMesh = mesh;
+    this.bgMesh = null;
     this.videoTexture = texture;
-  
-    this.scene.add(mesh);
   }
 
   async loadGLB(url) {
