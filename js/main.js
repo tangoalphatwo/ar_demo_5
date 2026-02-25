@@ -3,7 +3,8 @@
 
 import { initPose, estimatePose } from './pose.js';
 import { detectMarkerQuad } from './marker_quad.js';
-import { setStatus } from './ui.js';
+import { ARRenderer } from './renderer.js';
+import { applyViewRect, setStatus } from './ui.js';
 
 function makeNonThenable(cvObj) {
   if (!cvObj) return cvObj;
@@ -101,25 +102,6 @@ async function startCameraPreview() {
   };
 }
 
-function drawDot(ctx, x, y, { radius = 6, color = 'rgba(255, 0, 0, 0.95)' } = {}) {
-  ctx.save();
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function averageCorner(corners) {
-  let sx = 0;
-  let sy = 0;
-  for (const c of corners) {
-    sx += c.x;
-    sy += c.y;
-  }
-  return { x: sx / corners.length, y: sy / corners.length };
-}
-
 function radToDeg(r) {
   return (r * 180) / Math.PI;
 }
@@ -145,6 +127,7 @@ window.addEventListener('load', () => {
 
   let running = false;
   let cameraHandle = null;
+  let ar = null;
   const poseLogThrottle = createThrottle(250);
   const markerLogThrottle = createThrottle(1200);
 
@@ -154,6 +137,8 @@ window.addEventListener('load', () => {
 
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
   const MARKER_MIN_AREA_FRAC = 0.005;
+  const MODEL_URL = 'model/house.glb';
+  const TARGET_HEIGHT_M = 0.0762; // ~3 inches
 
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
@@ -176,6 +161,45 @@ window.addEventListener('load', () => {
 
       // Pose init for solvePnP
       initPose(cameraHandle.videoEl, cv);
+
+      // Three overlay setup
+      const threeCanvas = document.getElementById('threeCanvas');
+      if (!threeCanvas) throw new Error('Missing #threeCanvas element');
+      ar = new ARRenderer(threeCanvas);
+
+      // Match Three camera projection to the same simple intrinsics used by solvePnP.
+      // pose.js uses focalLengthPx = max(videoWidthPx, videoHeightPx).
+      const focalLengthPx = Math.max(cameraHandle.videoEl.videoWidth, cameraHandle.videoEl.videoHeight);
+      ar.setProjectionFromVideo({
+        videoWidthPx: cameraHandle.videoEl.videoWidth,
+        videoHeightPx: cameraHandle.videoEl.videoHeight,
+        focalLengthPx
+      });
+
+      const doLayout = () => {
+        applyViewRect({ videoEl: cameraHandle.videoEl, cvCanvas: cameraHandle.cvCanvas, threeCanvas });
+        ar.resize();
+      };
+      doLayout();
+      window.addEventListener('resize', doLayout, { passive: true });
+      window.addEventListener('orientationchange', doLayout, { passive: true });
+
+      // Load and spawn model at world zero (marker center)
+      setStatus('Loading model…');
+      console.log('[Model] Loading', MODEL_URL);
+      ar.loadGLB(MODEL_URL)
+        .then((gltf) => {
+          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M });
+          console.log('[Model] Bounds before scale (m-ish units):', info.sizeBefore);
+          console.log('[Model] Scale applied:', info.scaleApplied);
+          console.log('[Model] Bounds after scale:', info.sizeAfter);
+          console.log('[Model] Spawned at world zero (marker center)');
+          setStatus('Running');
+        })
+        .catch((e) => {
+          console.error('[Model] Failed to load', MODEL_URL, e);
+          setStatus('Model load failed (see console)');
+        });
 
       setStatus('Running');
       console.log('[Boot] Camera running');
@@ -223,6 +247,11 @@ window.addEventListener('load', () => {
 
             const pose = estimatePose(quad.corners, objectPoints, cv);
 
+            // Update Three camera from marker pose (marker is world origin).
+            if (pose && ar) {
+              ar.setCameraFromMarkerPose(pose);
+            }
+
             // Step 4: world zero is the marker center (object points are centered at origin).
             // We "lock" once we have a valid pose.
             if (pose && !worldLocked) {
@@ -231,13 +260,6 @@ window.addEventListener('load', () => {
               console.log('[World] zero set at marker center');
             } else if (!worldLocked) {
               setStatus('Detecting marker…');
-            }
-
-            // Step 5: red dot at marker center (image coordinates)
-            const c = averageCorner(quad.corners);
-            drawDot(ctx, c.x, c.y);
-            if (markerLogThrottle()) {
-              console.log('[Marker] center dot placed', { x: c.x, y: c.y });
             }
 
             // Step 6: distance + rotation from pose
@@ -259,6 +281,9 @@ window.addEventListener('load', () => {
 
             setStatus('Point at marker');
           }
+
+          // Render Three overlay (even if marker is momentarily lost)
+          ar?.render?.();
         } catch (e) {
           console.error('[Tick] error:', e);
         } finally {

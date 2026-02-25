@@ -1,11 +1,16 @@
 // renderer.js
 import * as THREE from 'https://esm.sh/three@0.160.0';
+import { GLTFLoader } from 'https://esm.sh/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
 
 export class ARRenderer {
   constructor(canvasEl) {
     this.canvas = canvasEl;
 
     this.scene = new THREE.Scene();
+
+    // World/root group. Keep models parented here at world origin.
+    this.world = new THREE.Group();
+    this.scene.add(this.world);
 
     // Fallback FOV; call setProjectionFromVideo() after camera starts for better alignment.
     const fov = 80;
@@ -33,6 +38,81 @@ export class ARRenderer {
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
     this._projectionInfo = null;
+  }
+
+  async loadGLB(url) {
+    const loader = new GLTFLoader();
+    return new Promise((resolve, reject) => {
+      loader.load(
+        url,
+        (gltf) => resolve(gltf),
+        undefined,
+        (err) => reject(err)
+      );
+    });
+  }
+
+  clearWorld() {
+    while (this.world.children.length) {
+      this.world.remove(this.world.children[0]);
+    }
+  }
+
+  _getBounds(object3d) {
+    if (!object3d) return null;
+    object3d.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(object3d);
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+    return { box, size, center };
+  }
+
+  /**
+   * Adds a model at world origin (marker center).
+   * - Scales so its height is ~targetHeightM (meters), if provided.
+   * - Centers in X/Z and places its bottom on y=0.
+   */
+  addModelAtWorldZero(object3d, { targetHeightM } = {}) {
+    if (!object3d) throw new Error('addModelAtWorldZero: object3d is required');
+
+    this.clearWorld();
+
+    const before = this._getBounds(object3d);
+    if (!before) throw new Error('addModelAtWorldZero: could not compute bounds');
+
+    let scaleApplied = 1;
+    if (isFinite(targetHeightM) && targetHeightM > 0 && isFinite(before.size.y) && before.size.y > 1e-6) {
+      scaleApplied = targetHeightM / before.size.y;
+      object3d.scale.multiplyScalar(scaleApplied);
+    }
+
+    // After scaling, re-evaluate bounds for placement.
+    const afterScale = this._getBounds(object3d);
+    if (!afterScale) throw new Error('addModelAtWorldZero: could not compute bounds after scaling');
+
+    // Center horizontally (x/z) around origin.
+    object3d.position.x -= afterScale.center.x;
+    object3d.position.z -= afterScale.center.z;
+
+    // Put base on y=0.
+    object3d.updateWorldMatrix(true, true);
+    const afterCenter = this._getBounds(object3d);
+    if (afterCenter) {
+      object3d.position.y -= afterCenter.box.min.y;
+    }
+
+    object3d.updateWorldMatrix(true, true);
+    const finalBounds = this._getBounds(object3d);
+
+    this.world.add(object3d);
+
+    return {
+      sizeBefore: { x: before.size.x, y: before.size.y, z: before.size.z },
+      sizeAfter: finalBounds ? { x: finalBounds.size.x, y: finalBounds.size.y, z: finalBounds.size.z } : null,
+      scaleApplied
+    };
   }
 
   // Align Three camera FOV with our (approximate) OpenCV intrinsics.
