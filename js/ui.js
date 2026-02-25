@@ -24,8 +24,10 @@ function computeContainRect(srcW, srcH, dstW, dstH) {
 export function applyViewRect({ videoEl, cvCanvas, threeCanvas }) {
   if (!videoEl || !cvCanvas || !threeCanvas) return;
 
-  const vw = videoEl.videoWidth;
-  const vh = videoEl.videoHeight;
+  // On some mobile browsers, videoWidth/videoHeight can briefly report 0.
+  // Fall back to the canvas backing size, which we set from the video metadata.
+  const vw = videoEl.videoWidth || cvCanvas.width;
+  const vh = videoEl.videoHeight || cvCanvas.height;
   const rect = computeContainRect(vw, vh, window.innerWidth, window.innerHeight);
 
   const px = (n) => `${Math.round(n)}px`;

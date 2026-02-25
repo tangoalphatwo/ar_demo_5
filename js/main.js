@@ -138,7 +138,8 @@ window.addEventListener('load', () => {
   const MARKER_SIZE_METERS = 0.1016; // 4 inches
   const MARKER_MIN_AREA_FRAC = 0.005;
   const MODEL_URL = 'model/house.glb';
-  const TARGET_HEIGHT_M = 0.0762; // ~3 inches
+  // Keep it under ~3" tall; tune as needed.
+  const TARGET_HEIGHT_M = 0.0508; // ~2 inches
 
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
@@ -190,6 +191,8 @@ window.addEventListener('load', () => {
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
           const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M });
+          // Hide until we have a valid pose, so it can't appear "stuck" on screen.
+          ar.world.visible = false;
           console.log('[Model] Bounds before scale (m-ish units):', info.sizeBefore);
           console.log('[Model] Scale applied:', info.scaleApplied);
           console.log('[Model] Bounds after scale:', info.sizeAfter);
@@ -250,6 +253,8 @@ window.addEventListener('load', () => {
             // Update Three camera from marker pose (marker is world origin).
             if (pose && ar) {
               ar.setCameraFromMarkerPose(pose);
+              // Show model only when pose is valid.
+              ar.world.visible = true;
             }
 
             // Step 4: world zero is the marker center (object points are centered at origin).
@@ -278,6 +283,9 @@ window.addEventListener('load', () => {
               markerSeen = false;
               console.log('[Marker] lost');
             }
+
+            // Hide model when tracking is lost.
+            if (ar?.world) ar.world.visible = false;
 
             setStatus('Point at marker');
           }

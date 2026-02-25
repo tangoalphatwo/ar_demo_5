@@ -82,9 +82,15 @@ export class ARRenderer {
     const before = this._getBounds(object3d);
     if (!before) throw new Error('addModelAtWorldZero: could not compute bounds');
 
+    // Some GLBs come in with a different "up" axis, so size.y can be tiny.
+    // To avoid accidental huge scaling, choose a stable reference dimension.
+    const maxDim = Math.max(before.size.x, before.size.y, before.size.z);
+    const yDim = before.size.y;
+    const refDim = (isFinite(yDim) && yDim > 1e-6 && yDim >= maxDim * 0.2) ? yDim : maxDim;
+
     let scaleApplied = 1;
-    if (isFinite(targetHeightM) && targetHeightM > 0 && isFinite(before.size.y) && before.size.y > 1e-6) {
-      scaleApplied = targetHeightM / before.size.y;
+    if (isFinite(targetHeightM) && targetHeightM > 0 && isFinite(refDim) && refDim > 1e-6) {
+      scaleApplied = targetHeightM / refDim;
       object3d.scale.multiplyScalar(scaleApplied);
     }
 
