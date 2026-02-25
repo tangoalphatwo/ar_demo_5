@@ -40,6 +40,27 @@ export class ARRenderer {
     this._projectionInfo = null;
   }
 
+  _getCanvasCssSize() {
+    // On some mobile browsers, clientWidth/clientHeight can lag behind style changes.
+    // getBoundingClientRect() is more reliable for the actual drawn size.
+    const r = this.canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width || this.canvas.clientWidth || window.innerWidth || 1));
+    const h = Math.max(1, Math.round(r.height || this.canvas.clientHeight || window.innerHeight || 1));
+    return { w, h };
+  }
+
+  getDebugInfo() {
+    const rect = this.canvas.getBoundingClientRect();
+    const { w, h } = this._getCanvasCssSize();
+    return {
+      canvasRect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+      canvasCssSize: { w, h },
+      pixelRatio: this.renderer.getPixelRatio?.() ?? null,
+      projection: this._projectionInfo,
+      cameraPos: { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z }
+    };
+  }
+
   async loadGLB(url) {
     const loader = new GLTFLoader();
     return new Promise((resolve, reject) => {
@@ -176,16 +197,14 @@ export class ARRenderer {
 
   render() {
     // Force a full clear + viewport each frame to avoid seam/scanline artifacts on some mobile GPUs.
-    const w = this.canvas.clientWidth || window.innerWidth || 1;
-    const h = this.canvas.clientHeight || window.innerHeight || 1;
+    const { w, h } = this._getCanvasCssSize();
     this.renderer.setViewport(0, 0, w, h);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.scene, this.camera);
   }
 
   resize() {
-    const w = this.canvas.clientWidth || window.innerWidth || 1;
-    const h = this.canvas.clientHeight || window.innerHeight || 1;
+    const { w, h } = this._getCanvasCssSize();
     const pr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);

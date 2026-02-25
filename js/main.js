@@ -130,6 +130,7 @@ window.addEventListener('load', () => {
   let ar = null;
   const poseLogThrottle = createThrottle(250);
   const markerLogThrottle = createThrottle(1200);
+  const layoutLogThrottle = createThrottle(1200);
 
   // Marker-based bootstrap state
   let worldLocked = false;
@@ -178,8 +179,19 @@ window.addEventListener('load', () => {
       });
 
       const doLayout = () => {
-        applyViewRect({ videoEl: cameraHandle.videoEl, cvCanvas: cameraHandle.cvCanvas, threeCanvas });
+        const rect = applyViewRect({ videoEl: cameraHandle.videoEl, cvCanvas: cameraHandle.cvCanvas, threeCanvas });
         ar.resize();
+
+        if (layoutLogThrottle()) {
+          const cvRect = cameraHandle.cvCanvas.getBoundingClientRect();
+          const threeRect = threeCanvas.getBoundingClientRect();
+          console.log('[Layout] viewRect:', rect, {
+            video: { vw: cameraHandle.videoEl.videoWidth, vh: cameraHandle.videoEl.videoHeight },
+            cvCanvas: { cssW: cvRect.width, cssH: cvRect.height, left: cvRect.left, top: cvRect.top, w: cameraHandle.cvCanvas.width, h: cameraHandle.cvCanvas.height },
+            threeCanvas: { cssW: threeRect.width, cssH: threeRect.height, left: threeRect.left, top: threeRect.top },
+            three: ar.getDebugInfo?.()
+          });
+        }
       };
       doLayout();
       window.addEventListener('resize', doLayout, { passive: true });
@@ -277,6 +289,15 @@ window.addEventListener('load', () => {
                 pitch: radToDeg(r.pitch),
                 roll: radToDeg(r.roll)
               }, 't(m):', p);
+
+              // Extra instrumentation: helps diagnose "model stuck" issues.
+              if (ar?.camera) {
+                console.log('[Three] camera pos:', {
+                  x: ar.camera.position.x,
+                  y: ar.camera.position.y,
+                  z: ar.camera.position.z
+                });
+              }
             }
           } else {
             if (markerSeen) {
