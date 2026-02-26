@@ -6,6 +6,15 @@ let worldOrigin = null;
 let rawPose = null;
 let lastPose = null;
 
+let lastSolvePnpFailLogMs = 0;
+function logSolvePnpFailOncePer(ms, payload) {
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (now - lastSolvePnpFailLogMs >= ms) {
+    lastSolvePnpFailLogMs = now;
+    console.warn('[Pose] solvePnP failed', payload);
+  }
+}
+
 // Keep last rvec/tvec for solvePnP initial guess (significantly stabilizes pose)
 let lastRvecArr = null; // length 3
 let lastTvecArr = null; // length 3
@@ -158,21 +167,54 @@ export function estimatePose(imagePoints, objectPoints, cv) {
     useGuess = false;
   }
 
-  const success = cvModule.solvePnP(
-    objPts,
-    imgPts,
-    cameraMatrix,
-    distCoeffs,
-    rvec,
-    tvec,
-    useGuess,
-    cvModule.SOLVEPNP_ITERATIVE
-  );
+  // Try a small set of flags for robustness across devices/frames.
+  const flagsToTry = [];
+  if (typeof cvModule.SOLVEPNP_ITERATIVE === 'number') flagsToTry.push(cvModule.SOLVEPNP_ITERATIVE);
+  if (typeof cvModule.SOLVEPNP_IPPE_SQUARE === 'number') flagsToTry.push(cvModule.SOLVEPNP_IPPE_SQUARE);
+  if (typeof cvModule.SOLVEPNP_EPNP === 'number') flagsToTry.push(cvModule.SOLVEPNP_EPNP);
+
+  let success = false;
+  let usedFlag = null;
+  for (const flag of flagsToTry) {
+    try {
+      success = cvModule.solvePnP(
+        objPts,
+        imgPts,
+        cameraMatrix,
+        distCoeffs,
+        rvec,
+        tvec,
+        useGuess,
+        flag
+      );
+      if (success) {
+        usedFlag = flag;
+        break;
+      }
+    } catch (e) {
+      // Continue to next flag.
+    }
+  }
 
   imgPts.delete();
   objPts.delete();
 
   if (!success) {
+    // Throttled diagnostics to help debug point ordering / scale / intrinsics mismatch.
+    logSolvePnpFailOncePer(750, {
+      usedFlag,
+      useGuess,
+      imagePoints,
+      objectPoints,
+      intrinsics: cameraMatrix ? {
+        w: cameraMatrix.cols,
+        h: cameraMatrix.rows,
+        fx: cameraMatrix.data64F ? cameraMatrix.data64F[0] : null,
+        fy: cameraMatrix.data64F ? cameraMatrix.data64F[4] : null,
+        cx: cameraMatrix.data64F ? cameraMatrix.data64F[2] : null,
+        cy: cameraMatrix.data64F ? cameraMatrix.data64F[5] : null
+      } : null
+    });
     rvec.delete();
     tvec.delete();
     return null;

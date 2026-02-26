@@ -267,6 +267,13 @@ window.addEventListener('load', () => {
 
             const pose = estimatePose(quad.corners, objectPoints, cv);
 
+            if (!pose) {
+              // Keep the user-facing status accurate if solvePnP is failing.
+              if (poseLogThrottle()) {
+                setStatusLines(['Marker detected', 'Pose failed (solvePnP)']);
+              }
+            }
+
             // Update Three camera from marker pose (marker is world origin).
             if (pose && ar) {
               ar.setCameraFromMarkerPose(pose);
