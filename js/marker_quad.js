@@ -3,15 +3,41 @@
 function orderCorners(pts) {
   // pts: Array<{x,y}> length 4
   // Return [tl, tr, br, bl] in image coordinates (y down).
-  const sums = pts.map((p) => p.x + p.y);
-  const diffs = pts.map((p) => p.x - p.y);
+  // Robust to rotation; avoids sum/diff tie issues that can create duplicates.
+  if (!pts || pts.length !== 4) return pts;
 
-  const tl = pts[sums.indexOf(Math.min(...sums))];
-  const br = pts[sums.indexOf(Math.max(...sums))];
-  const tr = pts[diffs.indexOf(Math.max(...diffs))];
-  const bl = pts[diffs.indexOf(Math.min(...diffs))];
+  const uniq = new Set(pts.map((p) => `${p.x},${p.y}`));
+  if (uniq.size !== 4) return pts;
 
-  return [tl, tr, br, bl];
+  const cx = pts.reduce((s, p) => s + p.x, 0) / 4;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / 4;
+
+  const byAngle = pts
+    .map((p) => ({ p, a: Math.atan2(p.y - cy, p.x - cx) }))
+    .sort((a, b) => a.a - b.a)
+    .map((o) => o.p);
+
+  // Rotate so TL (min x+y) is first.
+  let tlIdx = 0;
+  let best = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const v = byAngle[i].x + byAngle[i].y;
+    if (v < best) {
+      best = v;
+      tlIdx = i;
+    }
+  }
+  const rot = [0, 1, 2, 3].map((k) => byAngle[(tlIdx + k) % 4]);
+
+  // rot is either [tl,tr,br,bl] or [tl,bl,br,tr]. Pick the one where the
+  // second point is to the right of the fourth.
+  const tl = rot[0];
+  const p1 = rot[1];
+  const p3 = rot[3];
+  if (p1.x < p3.x) {
+    return [tl, p3, rot[2], p1];
+  }
+  return [tl, p1, rot[2], p3];
 }
 
 function dist2(a, b) {

@@ -174,8 +174,8 @@ window.addEventListener('load', () => {
       ar = new ARRenderer(threeCanvas);
 
       // Match Three camera projection to the same simple intrinsics used by solvePnP.
-      // pose.js uses focalLengthPx = max(videoWidthPx, videoHeightPx).
-      const focalLengthPx = Math.max(cameraHandle.videoEl.videoWidth, cameraHandle.videoEl.videoHeight);
+      // pose.js uses focalLengthPx = videoWidthPx.
+      const focalLengthPx = cameraHandle.videoEl.videoWidth;
       ar.setProjectionFromVideo({
         videoWidthPx: cameraHandle.videoEl.videoWidth,
         videoHeightPx: cameraHandle.videoEl.videoHeight,

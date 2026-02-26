@@ -15,6 +15,15 @@ function logSolvePnpFailOncePer(ms, payload) {
   }
 }
 
+let lastSolvePnpExceptionLogMs = 0;
+function logSolvePnpExceptionOncePer(ms, payload) {
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (now - lastSolvePnpExceptionLogMs >= ms) {
+    lastSolvePnpExceptionLogMs = now;
+    console.warn('[Pose] solvePnP threw', payload);
+  }
+}
+
 // Keep last rvec/tvec for solvePnP initial guess (significantly stabilizes pose)
 let lastRvecArr = null; // length 3
 let lastTvecArr = null; // length 3
@@ -76,9 +85,9 @@ export function initPose(video, cv) {
   const width  = video.videoWidth;
   const height = video.videoHeight;
 
-  // Rough intrinsics estimate. Using only `width` tends to make the pose "too close"
-  // on tall (portrait) frames, which can make AR content appear huge / offset.
-  const focalLength = Math.max(width, height);
+  // Rough intrinsics estimate (matches the older working pipeline): fx=fy=width.
+  // This is not physically perfect, but tends to keep solvePnP stable.
+  const focalLength = width;
 
   cameraMatrix = matFromArray(3, 3, cvModule.CV_64F, [
     focalLength, 0, width / 2,
@@ -88,7 +97,8 @@ export function initPose(video, cv) {
 
   console.log('[Pose] Intrinsics', { width, height, focalLength });
 
-  distCoeffs = cvModule.Mat.zeros(4, 1, cvModule.CV_64F);
+  // Use 5 coefficients (k1,k2,p1,p2,k3). Many OpenCV builds accept 4, but 5 is safer.
+  distCoeffs = cvModule.Mat.zeros(5, 1, cvModule.CV_64F);
 }
 
 function toCvPoint2f(points) {
@@ -147,8 +157,9 @@ export function estimatePose(imagePoints, objectPoints, cv) {
   const imgPts = toCvPoint2f(imagePoints);
   const objPts = toCvPoint3f(objectPoints);
 
-  const rvec = new cvModule.Mat();
-  const tvec = new cvModule.Mat();
+  // Pre-allocate outputs as 3x1 CV_64F (some OpenCV.js builds are picky if these are empty).
+  const rvec = cvModule.Mat.zeros(3, 1, cvModule.CV_64F);
+  const tvec = cvModule.Mat.zeros(3, 1, cvModule.CV_64F);
 
   // Use previous pose as an initial guess when available.
   let useGuess = false;
@@ -192,6 +203,7 @@ export function estimatePose(imagePoints, objectPoints, cv) {
         break;
       }
     } catch (e) {
+      logSolvePnpExceptionOncePer(750, { flag, useGuess, message: String(e?.message || e) });
       // Continue to next flag.
     }
   }
