@@ -38,6 +38,10 @@ export class ARRenderer {
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
     this._projectionInfo = null;
+
+    // Track last known CSS size so we can auto-resize if mobile UI chrome changes it.
+    const { w: cssW, h: cssH } = this._getCanvasCssSize();
+    this._lastCssSize = { w: cssW, h: cssH };
   }
 
   _getCanvasCssSize() {
@@ -197,8 +201,15 @@ export class ARRenderer {
 
   render() {
     // Force a full clear + viewport each frame to avoid seam/scanline artifacts on some mobile GPUs.
+    // IMPORTANT: setViewport expects *drawing buffer* pixels, not CSS pixels.
     const { w, h } = this._getCanvasCssSize();
-    this.renderer.setViewport(0, 0, w, h);
+    if (!this._lastCssSize || this._lastCssSize.w !== w || this._lastCssSize.h !== h) {
+      this.resize();
+    }
+
+    const buf = new THREE.Vector2();
+    this.renderer.getDrawingBufferSize(buf);
+    this.renderer.setViewport(0, 0, buf.x, buf.y);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.scene, this.camera);
   }
@@ -210,5 +221,7 @@ export class ARRenderer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+
+    this._lastCssSize = { w, h };
   }
 }
