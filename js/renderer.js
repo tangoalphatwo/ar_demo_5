@@ -169,33 +169,50 @@ export class ARRenderer {
   // Preferred AR path: treat the marker as world origin and move the camera.
   // pose is marker->camera (OpenCV solvePnP), so camera->world is its inverse.
   setCameraFromMarkerPose(pose) {
-    if (!pose || !pose.position || !pose.rotationMatrix) {
-      return;
-    }
+    if (!pose || !pose.position || !pose.rotationMatrix) return;
 
+    // Legacy math (from the previously-working renderer): this intentionally mirrors the
+    // old element ordering / transpose behavior that your pipeline was validated against.
     const r = pose.rotationMatrix;
     const r00 = r[0], r01 = r[1], r02 = r[2];
     const r10 = r[3], r11 = r[4], r12 = r[5];
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
-    // Build T_cw (world/marker -> camera) in Three coordinate conventions.
-    // OpenCV camera coords: x right, y down, z forward.
-    // Three camera coords: x right, y up, z backward.
-    // Convert by flipping Y and Z axes (S = diag(1,-1,-1)).
+    // Convert OpenCV to Three coordinates: R_three = S * R_cv * S, S=diag(1,-1,-1)
+    const Rcw = new THREE.Matrix3();
+    Rcw.set(
+      r00, -r01, -r02,
+      -r10, r11, r12,
+      -r20, r21, r22
+    );
+
+    // t_three (world->camera). pose.js already flips Y, so we only flip Z here.
     const tcw = new THREE.Vector3(pose.position.x, pose.position.y, -pose.position.z);
-    const Tcw = new THREE.Matrix4();
-    Tcw.set(
-      r00, -r01, -r02, tcw.x,
-      -r10, r11, r12, tcw.y,
-      -r20, r21, r22, tcw.z,
+
+    // Invert: T_wc = [R_wc | t_wc] where R_wc = R_cw^T, t_wc = -R_cw^T * t_cw
+    const Rwc = Rcw.clone().transpose();
+
+    const t_wc = tcw.clone();
+    const e = Rwc.elements;
+    const x = t_wc.x, y = t_wc.y, z = t_wc.z;
+    t_wc.set(
+      e[0] * x + e[1] * y + e[2] * z,
+      e[3] * x + e[4] * y + e[5] * z,
+      e[6] * x + e[7] * y + e[8] * z
+    );
+    t_wc.multiplyScalar(-1);
+
+    const m = new THREE.Matrix4();
+    const re = Rwc.elements;
+    m.set(
+      re[0], re[1], re[2], t_wc.x,
+      re[3], re[4], re[5], t_wc.y,
+      re[6], re[7], re[8], t_wc.z,
       0, 0, 0, 1
     );
 
-    // Camera world matrix is the inverse of world->camera.
-    const Twc = Tcw.clone().invert();
-
     this.camera.matrixAutoUpdate = false;
-    this.camera.matrix.copy(Twc);
+    this.camera.matrix.copy(m);
     this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
   }
 

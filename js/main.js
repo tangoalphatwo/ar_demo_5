@@ -4,7 +4,7 @@
 import { initPose, estimatePose } from './pose.js';
 import { detectMarkerQuad } from './marker_quad.js';
 import { ARRenderer } from './renderer.js';
-import { applyViewRect, setStatus } from './ui.js';
+import { applyViewRect, setStatus, setStatusLines } from './ui.js';
 
 function makeNonThenable(cvObj) {
   if (!cvObj) return cvObj;
@@ -144,7 +144,7 @@ window.addEventListener('load', () => {
 
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
-    setStatus('Starting camera + OpenCV…');
+    setStatusLines(['Starting…', 'Requesting camera + OpenCV…']);
 
     console.log('[Boot] __opencvReady:', window.__opencvReady);
     console.log('[Boot] window.cv type:', typeof window.cv);
@@ -155,6 +155,8 @@ window.addEventListener('load', () => {
         waitForOpenCV({ timeoutMs: 20000 })
       ]);
 
+      setStatusLines(['Camera + OpenCV ready', 'Initializing pose…']);
+
       cameraHandle = camHandle;
 
       // Handy for DevTools
@@ -163,6 +165,8 @@ window.addEventListener('load', () => {
 
       // Pose init for solvePnP
       initPose(cameraHandle.videoEl, cv);
+
+      setStatusLines(['Pose initialized', 'Setting up renderer…']);
 
       // Three overlay setup
       const threeCanvas = document.getElementById('threeCanvas');
@@ -198,7 +202,7 @@ window.addEventListener('load', () => {
       window.addEventListener('orientationchange', doLayout, { passive: true });
 
       // Load and spawn model at world zero (marker center)
-      setStatus('Loading model…');
+      setStatusLines(['Renderer ready', 'Loading model…']);
       console.log('[Model] Loading', MODEL_URL);
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
@@ -209,14 +213,14 @@ window.addEventListener('load', () => {
           console.log('[Model] Scale applied:', info.scaleApplied);
           console.log('[Model] Bounds after scale:', info.sizeAfter);
           console.log('[Model] Spawned at world zero (marker center)');
-          setStatus('Running');
+          setStatusLines(['Model loaded', 'Point at marker']);
         })
         .catch((e) => {
           console.error('[Model] Failed to load', MODEL_URL, e);
-          setStatus('Model load failed (see console)');
+          setStatusLines(['Model load failed', 'See console']);
         });
 
-      setStatus('Running');
+      setStatusLines(['Running', 'Point at marker']);
       console.log('[Boot] Camera running');
       console.log('[Boot] OpenCV ready');
       console.log('[World] Marker coordinate system: origin is marker center (0,0,0)');
@@ -248,6 +252,7 @@ window.addEventListener('load', () => {
             if (!markerSeen) {
               markerSeen = true;
               console.log('[Marker] detected');
+              setStatusLines(['Marker detected', 'Estimating pose…']);
             }
 
             const s = MARKER_SIZE_METERS;
@@ -269,14 +274,21 @@ window.addEventListener('load', () => {
               ar.world.visible = true;
             }
 
+            if (pose && ar && markerLogThrottle()) {
+              console.log('[AR] world:', {
+                visible: !!ar.world?.visible,
+                children: ar.world?.children?.length ?? null
+              });
+            }
+
             // Step 4: world zero is the marker center (object points are centered at origin).
             // We "lock" once we have a valid pose.
             if (pose && !worldLocked) {
               worldLocked = true;
-              setStatus('World locked');
+              setStatusLines(['World locked', 'Tracking…']);
               console.log('[World] zero set at marker center');
             } else if (!worldLocked) {
-              setStatus('Detecting marker…');
+              setStatusLines(['Running', 'Detecting marker…']);
             }
 
             // Step 6: distance + rotation from pose
@@ -303,12 +315,13 @@ window.addEventListener('load', () => {
             if (markerSeen) {
               markerSeen = false;
               console.log('[Marker] lost');
+              setStatusLines(['Point at marker', '(marker lost)']);
             }
 
             // Hide model when tracking is lost.
             if (ar?.world) ar.world.visible = false;
 
-            setStatus('Point at marker');
+            if (!markerSeen) setStatusLines(['Point at marker', '']);
           }
 
           // Render Three overlay (even if marker is momentarily lost)

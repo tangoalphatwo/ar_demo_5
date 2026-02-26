@@ -65,4 +65,6 @@ html, body {
 #status {
   color: #222;
   font-size: 0.8rem;
+  white-space: pre-line;
+  text-align: center;
 }

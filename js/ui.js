@@ -5,6 +5,13 @@ export function setStatus(text) {
   if (statusEl) statusEl.textContent = text;
 }
 
+export function setStatusLines(lines) {
+  const statusEl = document.getElementById('status');
+  if (!statusEl) return;
+  if (Array.isArray(lines)) statusEl.textContent = lines.filter(Boolean).join('\n');
+  else statusEl.textContent = String(lines ?? '');
+}
+
 function computeContainRect(srcW, srcH, dstW, dstH) {
   const sw = Number(srcW);
   const sh = Number(srcH);
