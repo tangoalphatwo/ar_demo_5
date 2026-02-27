@@ -171,43 +171,43 @@ export class ARRenderer {
   setCameraFromMarkerPose(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) return;
 
-    // Legacy math (from the previously-working renderer): this intentionally mirrors the
-    // old element ordering / transpose behavior that your pipeline was validated against.
+    // NOTE: THREE.Matrix3 stores elements column-major internally, which is easy to misuse.
+    // Use explicit row-major math to match OpenCV's row-major rotation matrix.
     const r = pose.rotationMatrix;
     const r00 = r[0], r01 = r[1], r02 = r[2];
     const r10 = r[3], r11 = r[4], r12 = r[5];
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
-    // Convert OpenCV to Three coordinates: R_three = S * R_cv * S, S=diag(1,-1,-1)
-    const Rcw = new THREE.Matrix3();
-    Rcw.set(
+    // Convert OpenCV -> Three (axis flip): R_three = S * R_cv * S, S=diag(1,-1,-1)
+    // This yields the world->camera rotation in Three coordinates (Rcw).
+    const Rcw = [
       r00, -r01, -r02,
       -r10, r11, r12,
       -r20, r21, r22
-    );
+    ];
 
     // t_three (world->camera). pose.js already flips Y, so we only flip Z here.
-    const tcw = new THREE.Vector3(pose.position.x, pose.position.y, -pose.position.z);
+    const tcw = { x: pose.position.x, y: pose.position.y, z: -pose.position.z };
 
-    // Invert: T_wc = [R_wc | t_wc] where R_wc = R_cw^T, t_wc = -R_cw^T * t_cw
-    const Rwc = Rcw.clone().transpose();
+    // Invert: Rwc = Rcw^T, t_wc = -Rwc * t_cw
+    const Rwc = [
+      Rcw[0], Rcw[3], Rcw[6],
+      Rcw[1], Rcw[4], Rcw[7],
+      Rcw[2], Rcw[5], Rcw[8]
+    ];
 
-    const t_wc = tcw.clone();
-    const e = Rwc.elements;
-    const x = t_wc.x, y = t_wc.y, z = t_wc.z;
-    t_wc.set(
-      e[0] * x + e[1] * y + e[2] * z,
-      e[3] * x + e[4] * y + e[5] * z,
-      e[6] * x + e[7] * y + e[8] * z
-    );
-    t_wc.multiplyScalar(-1);
+    const t_wc = {
+      x: -(Rwc[0] * tcw.x + Rwc[1] * tcw.y + Rwc[2] * tcw.z),
+      y: -(Rwc[3] * tcw.x + Rwc[4] * tcw.y + Rwc[5] * tcw.z),
+      z: -(Rwc[6] * tcw.x + Rwc[7] * tcw.y + Rwc[8] * tcw.z)
+    };
 
     const m = new THREE.Matrix4();
-    const re = Rwc.elements;
+    // Matrix4.set args are row-major.
     m.set(
-      re[0], re[1], re[2], t_wc.x,
-      re[3], re[4], re[5], t_wc.y,
-      re[6], re[7], re[8], t_wc.z,
+      Rwc[0], Rwc[1], Rwc[2], t_wc.x,
+      Rwc[3], Rwc[4], Rwc[5], t_wc.y,
+      Rwc[6], Rwc[7], Rwc[8], t_wc.z,
       0, 0, 0, 1
     );
 

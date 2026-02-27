@@ -207,12 +207,17 @@ window.addEventListener('load', () => {
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
           const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M });
-          // Hide until we have a valid pose, so it can't appear "stuck" on screen.
-          ar.world.visible = false;
+          // Hide only if we don't yet have a valid pose.
+          // If we're already tracking, keep it visible so it appears immediately.
+          ar.world.visible = !!(worldLocked && markerSeen);
           console.log('[Model] Bounds before scale (m-ish units):', info.sizeBefore);
           console.log('[Model] Scale applied:', info.scaleApplied);
           console.log('[Model] Bounds after scale:', info.sizeAfter);
           console.log('[Model] Spawned at world zero (marker center)');
+          console.log('[Model] world state after spawn:', {
+            visible: !!ar.world?.visible,
+            children: ar.world?.children?.length ?? null
+          });
           setStatusLines(['Model loaded', 'Point at marker']);
         })
         .catch((e) => {
