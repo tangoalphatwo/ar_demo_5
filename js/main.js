@@ -281,7 +281,11 @@ window.addEventListener('load', () => {
 
             // Update Three camera from marker pose (marker is world origin).
             if (pose && ar) {
-              ar.setCameraFromMarkerPose(pose);
+              // Anchor the world group to the marker pose (camera stays at origin).
+              // This matches the approach used in the working ar_demo_7 repo and
+              // avoids subtle pose-inversion sign issues that can make models
+              // "spawn" but remain off-camera.
+              ar.setWorldFromMarkerPose(pose);
               // Show model only when pose is valid.
               ar.world.visible = true;
             }

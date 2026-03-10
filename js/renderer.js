@@ -44,6 +44,39 @@ export class ARRenderer {
     this._lastCssSize = { w: cssW, h: cssH };
   }
 
+  // Simpler AR path (matches ar_demo_7): keep camera at origin and move the world
+  // group so the marker pose drives the model transform.
+  // pose.rotationMatrix is row-major 3x3 from OpenCV.
+  setWorldFromMarkerPose(pose) {
+    if (!pose || !pose.position || !pose.rotationMatrix) return;
+
+    const r = pose.rotationMatrix;
+    const r00 = r[0], r01 = r[1], r02 = r[2];
+    const r10 = r[3], r11 = r[4], r12 = r[5];
+    const r20 = r[6], r21 = r[7], r22 = r[8];
+
+    // Convert OpenCV camera coords (x right, y down, z forward)
+    // to Three coords (x right, y up, z backward): S = diag(1,-1,-1)
+    const Rthree = new THREE.Matrix4();
+    Rthree.set(
+      r00, -r01, -r02, 0,
+      -r10, r11, r12, 0,
+      -r20, r21, r22, 0,
+      0, 0, 0, 1
+    );
+
+    const q = new THREE.Quaternion();
+    q.setFromRotationMatrix(Rthree);
+
+    // Keep camera fixed at origin (projection still comes from setProjectionFromVideo)
+    this.camera.matrixAutoUpdate = true;
+    this.camera.position.set(0, 0, 0);
+    this.camera.quaternion.set(0, 0, 0, 1);
+
+    this.world.position.set(pose.position.x, pose.position.y, -pose.position.z);
+    this.world.quaternion.copy(q);
+  }
+
   _getCanvasCssSize() {
     // On some mobile browsers, clientWidth/clientHeight can lag behind style changes.
     // getBoundingClientRect() is more reliable for the actual drawn size.
