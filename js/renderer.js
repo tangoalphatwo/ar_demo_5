@@ -132,9 +132,11 @@ export class ARRenderer {
   /**
    * Adds a model at world origin (marker center).
    * - Scales so its height is ~targetHeightM (meters), if provided.
-   * - Centers in X/Z and places its bottom on y=0.
+   * - Placement depends on markerPlane:
+   *   - 'XZ' (default): centers in X/Z and places bottom on y=0 (Y-up floor).
+   *   - 'XY': centers in X/Y and places bottom on z=0 (Z-out-of-plane).
    */
-  addModelAtWorldZero(object3d, { targetHeightM } = {}) {
+  addModelAtWorldZero(object3d, { targetHeightM, markerPlane = 'XZ' } = {}) {
     if (!object3d) throw new Error('addModelAtWorldZero: object3d is required');
 
     this.clearWorld();
@@ -142,11 +144,11 @@ export class ARRenderer {
     const before = this._getBounds(object3d);
     if (!before) throw new Error('addModelAtWorldZero: could not compute bounds');
 
-    // Some GLBs come in with a different "up" axis, so size.y can be tiny.
+    // Some GLBs come in with a different "up" axis, so the preferred axis can be tiny.
     // To avoid accidental huge scaling, choose a stable reference dimension.
     const maxDim = Math.max(before.size.x, before.size.y, before.size.z);
-    const yDim = before.size.y;
-    const refDim = (isFinite(yDim) && yDim > 1e-6 && yDim >= maxDim * 0.2) ? yDim : maxDim;
+    const preferredDim = (markerPlane === 'XY') ? before.size.z : before.size.y;
+    const refDim = (isFinite(preferredDim) && preferredDim > 1e-6 && preferredDim >= maxDim * 0.2) ? preferredDim : maxDim;
 
     let scaleApplied = 1;
     if (isFinite(targetHeightM) && targetHeightM > 0 && isFinite(refDim) && refDim > 1e-6) {
@@ -158,15 +160,28 @@ export class ARRenderer {
     const afterScale = this._getBounds(object3d);
     if (!afterScale) throw new Error('addModelAtWorldZero: could not compute bounds after scaling');
 
-    // Center horizontally (x/z) around origin.
-    object3d.position.x -= afterScale.center.x;
-    object3d.position.z -= afterScale.center.z;
+    if (markerPlane === 'XY') {
+      // Marker plane is XY (z=0), normal is +Z.
+      object3d.position.x -= afterScale.center.x;
+      object3d.position.y -= afterScale.center.y;
 
-    // Put base on y=0.
-    object3d.updateWorldMatrix(true, true);
-    const afterCenter = this._getBounds(object3d);
-    if (afterCenter) {
-      object3d.position.y -= afterCenter.box.min.y;
+      // Put base on z=0.
+      object3d.updateWorldMatrix(true, true);
+      const afterCenter = this._getBounds(object3d);
+      if (afterCenter) {
+        object3d.position.z -= afterCenter.box.min.z;
+      }
+    } else {
+      // Default: marker plane is XZ (y=0), normal is +Y.
+      object3d.position.x -= afterScale.center.x;
+      object3d.position.z -= afterScale.center.z;
+
+      // Put base on y=0.
+      object3d.updateWorldMatrix(true, true);
+      const afterCenter = this._getBounds(object3d);
+      if (afterCenter) {
+        object3d.position.y -= afterCenter.box.min.y;
+      }
     }
 
     object3d.updateWorldMatrix(true, true);

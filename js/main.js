@@ -206,7 +206,7 @@ window.addEventListener('load', () => {
       console.log('[Model] Loading', MODEL_URL);
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
-          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M });
+          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M, markerPlane: 'XY' });
           // Hide only if we don't yet have a valid pose.
           // If we're already tracking, keep it visible so it appears immediately.
           ar.world.visible = !!(worldLocked && markerSeen);
