@@ -263,14 +263,14 @@ window.addEventListener('load', () => {
             const s = MARKER_SIZE_METERS;
             const half = s * 0.5;
             const objectPoints = [
-              // World/marker coords used by Three/model placement:
-              // - Marker lies on the X/Z plane (Y is "up")
-              // - detectMarkerQuad() returns corners ordered [tl,tr,br,bl] in image coords
-              //   so we map TL/TR to +Z and BR/BL to -Z.
-              { x: -half, y: 0, z: half },
-              { x: half, y: 0, z: half },
-              { x: half, y: 0, z: -half },
-              { x: -half, y: 0, z: -half }
+              // Marker/object coordinates for solvePnP (matches ar_demo_7):
+              // - Marker lies on X/Y plane, Z = 0
+              // - Y is "down" in the marker plane, so TL/TR have negative Y
+              // - detectMarkerQuad() corners are ordered [tl,tr,br,bl]
+              { x: -half, y: -half, z: 0 },
+              { x: half, y: -half, z: 0 },
+              { x: half, y: half, z: 0 },
+              { x: -half, y: half, z: 0 }
             ];
 
             const pose = estimatePose(quad.corners, objectPoints, cv);

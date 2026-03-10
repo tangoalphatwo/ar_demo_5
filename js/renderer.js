@@ -56,14 +56,14 @@ export class ARRenderer {
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
     // Convert OpenCV camera coords (x right, y down, z forward)
-    // to Three camera coords (x right, y up, z backward): S = diag(1,-1,-1)
-    // Since our objectPoints are already defined in the Three/world convention,
-    // we only convert the camera frame: R_three = S * R_cv.
+    // to Three coords (x right, y up, z backward): S = diag(1,-1,-1)
+    // With objectPoints defined in the marker's OpenCV-style convention (X/Y plane),
+    // we convert both frames: R_three = S * R_cv * S.
     const Rthree = new THREE.Matrix4();
     Rthree.set(
-      r00, r01, r02, 0,
-      -r10, -r11, -r12, 0,
-      -r20, -r21, -r22, 0,
+      r00, -r01, -r02, 0,
+      -r10, r11, r12, 0,
+      -r20, r21, r22, 0,
       0, 0, 0, 1
     );
 
