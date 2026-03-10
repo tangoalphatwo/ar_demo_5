@@ -263,11 +263,14 @@ window.addEventListener('load', () => {
             const s = MARKER_SIZE_METERS;
             const half = s * 0.5;
             const objectPoints = [
-              // World/marker coords: X right, Y up, Z out of the marker plane.
-              { x: -half, y: half, z: 0 },
-              { x: half, y: half, z: 0 },
-              { x: half, y: -half, z: 0 },
-              { x: -half, y: -half, z: 0 }
+              // World/marker coords used by Three/model placement:
+              // - Marker lies on the X/Z plane (Y is "up")
+              // - detectMarkerQuad() returns corners ordered [tl,tr,br,bl] in image coords
+              //   so we map TL/TR to +Z and BR/BL to -Z.
+              { x: -half, y: 0, z: half },
+              { x: half, y: 0, z: half },
+              { x: half, y: 0, z: -half },
+              { x: -half, y: 0, z: -half }
             ];
 
             const pose = estimatePose(quad.corners, objectPoints, cv);
