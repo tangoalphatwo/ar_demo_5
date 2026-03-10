@@ -35,9 +35,27 @@ function orderCorners(pts) {
   const p1 = rot[1];
   const p3 = rot[3];
   if (p1.x < p3.x) {
-    return [tl, p3, rot[2], p1];
+    const out = [tl, p3, rot[2], p1];
+    // Enforce clockwise winding in image coords (y down) to avoid mirrored poses.
+    const a = out[0], b = out[1], c = out[2];
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (cross < 0) {
+      // swap TR and BL
+      return [out[0], out[3], out[2], out[1]];
+    }
+    return out;
   }
-  return [tl, p1, rot[2], p3];
+  {
+    const out = [tl, p1, rot[2], p3];
+    // Enforce clockwise winding in image coords (y down) to avoid mirrored poses.
+    const a = out[0], b = out[1], c = out[2];
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (cross < 0) {
+      // swap TR and BL
+      return [out[0], out[3], out[2], out[1]];
+    }
+    return out;
+  }
 }
 
 function dist2(a, b) {
