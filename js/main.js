@@ -206,19 +206,23 @@ window.addEventListener('load', () => {
       console.log('[Model] Loading', MODEL_URL);
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
-          const model = gltf.scene;
-
-          // TEMP DEBUG: mimic ar_demo_7's simple placement style
-          ar.clearWorld();
-
-          model.position.set(0, 0, 0.02);   // 2 cm off marker plane
-          model.scale.setScalar(0.001);      // temporary hardcoded test scale
-
-          ar.world.add(model);
+          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M, markerPlane: 'XY' });
+          // Hide only if we don't yet have a valid pose.
+          // If we're already tracking, keep it visible so it appears immediately.
           ar.world.visible = !!(worldLocked && markerSeen);
-
-          console.log('[Model] test placement active');
+          console.log('[Model] Bounds before scale (m-ish units):', info.sizeBefore);
+          console.log('[Model] Scale applied:', info.scaleApplied);
+          console.log('[Model] Bounds after scale:', info.sizeAfter);
+          console.log('[Model] Spawned at world zero (marker center)');
+          console.log('[Model] world state after spawn:', {
+            visible: !!ar.world?.visible,
+            children: ar.world?.children?.length ?? null
+          });
           setStatusLines(['Model loaded', 'Point at marker']);
+        })
+        .catch((e) => {
+          console.error('[Model] Failed to load', MODEL_URL, e);
+          setStatusLines(['Model load failed', 'See console']);
         });
 
       setStatusLines(['Running', 'Point at marker']);
@@ -280,11 +284,10 @@ window.addEventListener('load', () => {
 
             // Update Three camera from marker pose (marker is world origin).
             if (pose && ar) {
-              // Anchor the world group to the marker pose (camera stays at origin).
-              // This matches the approach used in the working ar_demo_7 repo and
-              // avoids subtle pose-inversion sign issues that can make models
-              // "spawn" but remain off-camera.
-              ar.setWorldFromMarkerPose(pose);
+              // Preferred AR path: keep marker as world origin and move the camera.
+              // pose is marker->camera (OpenCV solvePnP), so the camera transform
+              // is its inverse.
+              ar.setCameraFromMarkerPose(pose);
               // Show model only when pose is valid.
               ar.world.visible = true;
             }
