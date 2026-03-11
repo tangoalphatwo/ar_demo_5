@@ -206,7 +206,7 @@ window.addEventListener('load', () => {
       console.log('[Model] Loading', MODEL_URL);
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
-          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M, markerPlane: 'XY' });
+          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M, markerPlane: 'XZ' });
           // Hide only if we don't yet have a valid pose.
           // If we're already tracking, keep it visible so it appears immediately.
           ar.world.visible = !!(worldLocked && markerSeen);
@@ -263,14 +263,14 @@ window.addEventListener('load', () => {
             const s = MARKER_SIZE_METERS;
             const half = s * 0.5;
             const objectPoints = [
-              // Marker/object coordinates for solvePnP (matches ar_demo_7):
-              // - Marker lies on X/Y plane, Z = 0
-              // - Y is "down" in the marker plane, so TL/TR have negative Y
+              // Marker/object coordinates for solvePnP:
+              // - Marker lies on X/Z plane, Y = 0 (ground plane; Three is Y-up)
+              // - Z is "down" in the marker plane, so TL/TR have negative Z
               // - detectMarkerQuad() corners are ordered [tl,tr,br,bl]
-              { x: -half, y: -half, z: 0 },
-              { x: half, y: -half, z: 0 },
-              { x: half, y: half, z: 0 },
-              { x: -half, y: half, z: 0 }
+              { x: -half, y: 0, z: -half },
+              { x: half, y: 0, z: -half },
+              { x: half, y: 0, z: half },
+              { x: -half, y: 0, z: half }
             ];
 
             const pose = estimatePose(quad.corners, objectPoints, cv);
