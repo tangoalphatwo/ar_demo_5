@@ -56,14 +56,14 @@ export class ARRenderer {
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
     // Convert OpenCV camera coords (x right, y down, z forward)
-    // to Three coords (x right, y up, z backward): S = diag(1,-1,-1)
-    // With objectPoints defined in the marker's OpenCV-style convention (X/Y plane),
-    // we convert both frames: R_three = S * R_cv * S.
+    // to Three camera coords (x right, y up, z backward): S = diag(1,-1,-1)
+    // Since our objectPoints are defined in Three-style world coordinates (marker on XZ plane),
+    // we only convert the camera frame: R_three = S * R_cv.
     const Rthree = new THREE.Matrix4();
     Rthree.set(
-      r00, -r01, -r02, 0,
-      -r10, r11, r12, 0,
-      -r20, r21, r22, 0,
+      r00, r01, r02, 0,
+      -r10, -r11, -r12, 0,
+      -r20, -r21, -r22, 0,
       0, 0, 0, 1
     );
 
@@ -230,12 +230,13 @@ export class ARRenderer {
     const r10 = r[3], r11 = r[4], r12 = r[5];
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
-    // Convert OpenCV -> Three (axis flip): R_three = S * R_cv * S, S=diag(1,-1,-1)
+    // Convert OpenCV camera coords -> Three camera coords: R_three = S * R_cv, S=diag(1,-1,-1)
+    // (object/world is already in Three-style coordinates via objectPoints).
     // This yields the world->camera rotation in Three coordinates (Rcw).
     const Rcw = [
-      r00, -r01, -r02,
-      -r10, r11, r12,
-      -r20, r21, r22
+      r00, r01, r02,
+      -r10, -r11, -r12,
+      -r20, -r21, -r22
     ];
 
     // t_three (world->camera). Convert OpenCV translation to Three translation:
