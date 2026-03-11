@@ -208,26 +208,17 @@ window.addEventListener('load', () => {
         .then((gltf) => {
           const model = gltf.scene;
 
-          // Try the normal Y-up convention first
-          const info = ar.addModelAtWorldZero(model, {
-            targetHeightM: TARGET_HEIGHT_M,
-            markerPlane: 'XZ'
-          });
+          // TEMP DEBUG: mimic ar_demo_7's simple placement style
+          ar.clearWorld();
 
-          // Optional: tiny lift so it doesn't z-fight with the marker plane
-          model.position.y += 0.002;
+          model.position.set(0, 0, 0.02);   // 2 cm off marker plane
+          model.scale.setScalar(0.001);      // temporary hardcoded test scale
 
+          ar.world.add(model);
           ar.world.visible = !!(worldLocked && markerSeen);
 
-          console.log('[Model] Bounds before scale:', info.sizeBefore);
-          console.log('[Model] Scale applied:', info.scaleApplied);
-          console.log('[Model] Bounds after scale:', info.sizeAfter);
-          console.log('[Model] Spawned at world zero');
+          console.log('[Model] test placement active');
           setStatusLines(['Model loaded', 'Point at marker']);
-        })
-        .catch((e) => {
-          console.error('[Model] Failed to load', MODEL_URL, e);
-          setStatusLines(['Model load failed', 'See console']);
         });
 
       setStatusLines(['Running', 'Point at marker']);
