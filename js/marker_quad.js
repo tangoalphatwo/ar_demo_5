@@ -80,6 +80,93 @@ function isRoughlySquare(quad, maxAspectSkew = 0.35) {
   return Math.abs(1 - aspect) < maxAspectSkew;
 }
 
+function rotateCorners(corners, shift) {
+  // shift > 0 rotates so that corners[0] becomes corners[shift]
+  const s = ((shift % 4) + 4) % 4;
+  if (!s) return corners;
+  return [0, 1, 2, 3].map((k) => corners[(k - s + 4) % 4]);
+}
+
+function refineCornersWithMarkerSignature(cv, gray, corners) {
+  // Attempt to lock a stable corner identity using an asymmetric marker corner.
+  // Assumption (validated against marker/WorldZeroMarker.png): one physical corner
+  // is noticeably brighter inside the border; we treat that as the marker's BR.
+  // Returns a (possibly) rotated corners array in [tl,tr,br,bl] marker-physical order.
+  if (!cv || !gray || !corners || corners.length !== 4) return corners;
+
+  const N = 96;
+  const patch = 22;
+  const srcData = [];
+  for (const p of corners) srcData.push(p.x, p.y);
+
+  const src = cv.matFromArray(4, 1, cv.CV_32FC2, srcData);
+  const dst = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0, 0,
+    N - 1, 0,
+    N - 1, N - 1,
+    0, N - 1
+  ]);
+
+  const M = cv.getPerspectiveTransform(src, dst);
+  const warped = new cv.Mat();
+  try {
+    cv.warpPerspective(
+      gray,
+      warped,
+      M,
+      new cv.Size(N, N),
+      cv.INTER_LINEAR,
+      cv.BORDER_CONSTANT,
+      new cv.Scalar(0)
+    );
+
+    const means = [];
+    const rois = [
+      new cv.Rect(0, 0, patch, patch),
+      new cv.Rect(N - patch, 0, patch, patch),
+      new cv.Rect(N - patch, N - patch, patch, patch),
+      new cv.Rect(0, N - patch, patch, patch)
+    ];
+    for (const r of rois) {
+      const roi = warped.roi(r);
+      const m = cv.mean(roi)[0];
+      means.push(m);
+      roi.delete();
+    }
+
+    // Identify brightest corner patch.
+    let maxIdx = 0;
+    let maxVal = means[0];
+    let second = -Infinity;
+    for (let i = 1; i < 4; i++) {
+      const v = means[i];
+      if (v > maxVal) {
+        second = maxVal;
+        maxVal = v;
+        maxIdx = i;
+      } else if (v > second) {
+        second = v;
+      }
+    }
+
+    // Only apply if we have a clear winner.
+    if (!isFinite(maxVal) || !isFinite(second) || (maxVal - second) < 8) {
+      return corners;
+    }
+
+    // Rotate so the brightest corner maps to marker BR (index 2 in [tl,tr,br,bl]).
+    const shift = (2 - maxIdx + 4) % 4;
+    return rotateCorners(corners, shift);
+  } catch {
+    return corners;
+  } finally {
+    src.delete();
+    dst.delete();
+    M.delete();
+    warped.delete();
+  }
+}
+
 /**
  * Detect a square-ish quad in the frame.
  * Returns null or { corners: Array<{x,y}>, area: number }
@@ -87,7 +174,8 @@ function isRoughlySquare(quad, maxAspectSkew = 0.35) {
 export function detectMarkerQuad(cv, gray, {
   minAreaFrac = 0.02,
   maxAreaFrac = 0.85,
-  polyEpsFrac = 0.02
+  polyEpsFrac = 0.02,
+  refineCornerSignature = true
 } = {}) {
   const w = gray.cols;
   const h = gray.rows;
@@ -166,9 +254,11 @@ export function detectMarkerQuad(cv, gray, {
         continue;
       }
 
+      const refined = refineCornerSignature ? refineCornersWithMarkerSignature(cv, gray, ordered) : ordered;
+
       if (area > bestArea) {
         bestArea = area;
-        best = { corners: ordered, area };
+        best = { corners: refined, area };
       }
 
       approx.delete();
