@@ -206,18 +206,23 @@ window.addEventListener('load', () => {
       console.log('[Model] Loading', MODEL_URL);
       ar.loadGLB(MODEL_URL)
         .then((gltf) => {
-          const info = ar.addModelAtWorldZero(gltf.scene, { targetHeightM: TARGET_HEIGHT_M, markerPlane: 'XY' });
-          // Hide only if we don't yet have a valid pose.
-          // If we're already tracking, keep it visible so it appears immediately.
+          const model = gltf.scene;
+
+          // Try the normal Y-up convention first
+          const info = ar.addModelAtWorldZero(model, {
+            targetHeightM: TARGET_HEIGHT_M,
+            markerPlane: 'XZ'
+          });
+
+          // Optional: tiny lift so it doesn't z-fight with the marker plane
+          model.position.y += 0.002;
+
           ar.world.visible = !!(worldLocked && markerSeen);
-          console.log('[Model] Bounds before scale (m-ish units):', info.sizeBefore);
+
+          console.log('[Model] Bounds before scale:', info.sizeBefore);
           console.log('[Model] Scale applied:', info.scaleApplied);
           console.log('[Model] Bounds after scale:', info.sizeAfter);
-          console.log('[Model] Spawned at world zero (marker center)');
-          console.log('[Model] world state after spawn:', {
-            visible: !!ar.world?.visible,
-            children: ar.world?.children?.length ?? null
-          });
+          console.log('[Model] Spawned at world zero');
           setStatusLines(['Model loaded', 'Point at marker']);
         })
         .catch((e) => {
