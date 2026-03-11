@@ -53,9 +53,12 @@ function matFromArray(rows, cols, type, array) {
 
 function normalizeTranslation(tvec) {
   return {
-    x:  tvec[0],
-    y: -tvec[1], // flip Y
-    z:  tvec[2]
+    // Keep raw OpenCV camera coordinates:
+    // x: right, y: down, z: forward
+    // Axis conversion to Three.js happens in renderer.js.
+    x: tvec[0],
+    y: tvec[1],
+    z: tvec[2]
   };
 }
 

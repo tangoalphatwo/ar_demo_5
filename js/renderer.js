@@ -75,7 +75,9 @@ export class ARRenderer {
     this.camera.position.set(0, 0, 0);
     this.camera.quaternion.set(0, 0, 0, 1);
 
-    this.world.position.set(pose.position.x, pose.position.y, -pose.position.z);
+    // Convert OpenCV translation (x right, y down, z forward)
+    // to Three (x right, y up, z backward): t_three = S * t_cv
+    this.world.position.set(pose.position.x, -pose.position.y, -pose.position.z);
     this.world.quaternion.copy(q);
   }
 
@@ -236,8 +238,9 @@ export class ARRenderer {
       -r20, r21, r22
     ];
 
-    // t_three (world->camera). pose.js already flips Y, so we only flip Z here.
-    const tcw = { x: pose.position.x, y: pose.position.y, z: -pose.position.z };
+    // t_three (world->camera). Convert OpenCV translation to Three translation:
+    // t_three = S * t_cv, S=diag(1,-1,-1)
+    const tcw = { x: pose.position.x, y: -pose.position.y, z: -pose.position.z };
 
     // Invert: Rwc = Rcw^T, t_wc = -Rwc * t_cw
     const Rwc = [
@@ -263,6 +266,13 @@ export class ARRenderer {
 
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.copy(m);
+
+    // When we manually set `camera.matrix`, Three won't necessarily recompute
+    // `matrixWorld` unless we mark it dirty (renderer uses matrixWorld).
+    this.camera.matrixWorldNeedsUpdate = true;
+    this.camera.updateMatrixWorld(true);
+
+    // Decompose for debugging/inspection (rendering uses matrixWorld).
     this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
   }
 
