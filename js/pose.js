@@ -183,8 +183,9 @@ export function estimatePose(imagePoints, objectPoints, cv) {
 
   // Try a small set of flags for robustness across devices/frames.
   const flagsToTry = [];
-  if (typeof cvModule.SOLVEPNP_ITERATIVE === 'number') flagsToTry.push(cvModule.SOLVEPNP_ITERATIVE);
+  // Prefer IPPE for planar squares (typically less "float" than ITERATIVE on markers).
   if (typeof cvModule.SOLVEPNP_IPPE_SQUARE === 'number') flagsToTry.push(cvModule.SOLVEPNP_IPPE_SQUARE);
+  if (typeof cvModule.SOLVEPNP_ITERATIVE === 'number') flagsToTry.push(cvModule.SOLVEPNP_ITERATIVE);
   if (typeof cvModule.SOLVEPNP_EPNP === 'number') flagsToTry.push(cvModule.SOLVEPNP_EPNP);
 
   let success = false;
