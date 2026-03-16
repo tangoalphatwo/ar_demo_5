@@ -6,24 +6,6 @@ let worldOrigin = null;
 let rawPose = null;
 let lastPose = null;
 
-let lastSolvePnpFailLogMs = 0;
-function logSolvePnpFailOncePer(ms, payload) {
-  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  if (now - lastSolvePnpFailLogMs >= ms) {
-    lastSolvePnpFailLogMs = now;
-    console.warn('[Pose] solvePnP failed', payload);
-  }
-}
-
-let lastSolvePnpExceptionLogMs = 0;
-function logSolvePnpExceptionOncePer(ms, payload) {
-  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  if (now - lastSolvePnpExceptionLogMs >= ms) {
-    lastSolvePnpExceptionLogMs = now;
-    console.warn('[Pose] solvePnP threw', payload);
-  }
-}
-
 // Keep last rvec/tvec for solvePnP initial guess (significantly stabilizes pose)
 let lastRvecArr = null; // length 3
 let lastTvecArr = null; // length 3
@@ -53,12 +35,9 @@ function matFromArray(rows, cols, type, array) {
 
 function normalizeTranslation(tvec) {
   return {
-    // Keep raw OpenCV camera coordinates:
-    // x: right, y: down, z: forward
-    // Axis conversion to Three.js happens in renderer.js.
-    x: tvec[0],
-    y: tvec[1],
-    z: tvec[2]
+    x:  tvec[0],
+    y: -tvec[1], // flip Y
+    z:  tvec[2]
   };
 }
 
@@ -88,8 +67,6 @@ export function initPose(video, cv) {
   const width  = video.videoWidth;
   const height = video.videoHeight;
 
-  // Rough intrinsics estimate (matches the older working pipeline): fx=fy=width.
-  // This is not physically perfect, but tends to keep solvePnP stable.
   const focalLength = width;
 
   cameraMatrix = matFromArray(3, 3, cvModule.CV_64F, [
@@ -98,10 +75,7 @@ export function initPose(video, cv) {
     0, 0, 1
   ]);
 
-  console.log('[Pose] Intrinsics', { width, height, focalLength });
-
-  // Use 5 coefficients (k1,k2,p1,p2,k3). Many OpenCV builds accept 4, but 5 is safer.
-  distCoeffs = cvModule.Mat.zeros(5, 1, cvModule.CV_64F);
+  distCoeffs = cvModule.Mat.zeros(4, 1, cvModule.CV_64F);
 }
 
 function toCvPoint2f(points) {
@@ -160,9 +134,8 @@ export function estimatePose(imagePoints, objectPoints, cv) {
   const imgPts = toCvPoint2f(imagePoints);
   const objPts = toCvPoint3f(objectPoints);
 
-  // Pre-allocate outputs as 3x1 CV_64F (some OpenCV.js builds are picky if these are empty).
-  const rvec = cvModule.Mat.zeros(3, 1, cvModule.CV_64F);
-  const tvec = cvModule.Mat.zeros(3, 1, cvModule.CV_64F);
+  const rvec = new cvModule.Mat();
+  const tvec = new cvModule.Mat();
 
   // Use previous pose as an initial guess when available.
   let useGuess = false;
@@ -181,56 +154,21 @@ export function estimatePose(imagePoints, objectPoints, cv) {
     useGuess = false;
   }
 
-  // Try a small set of flags for robustness across devices/frames.
-  const flagsToTry = [];
-  // Prefer IPPE for planar squares (typically less "float" than ITERATIVE on markers).
-  if (typeof cvModule.SOLVEPNP_IPPE_SQUARE === 'number') flagsToTry.push(cvModule.SOLVEPNP_IPPE_SQUARE);
-  if (typeof cvModule.SOLVEPNP_ITERATIVE === 'number') flagsToTry.push(cvModule.SOLVEPNP_ITERATIVE);
-  if (typeof cvModule.SOLVEPNP_EPNP === 'number') flagsToTry.push(cvModule.SOLVEPNP_EPNP);
-
-  let success = false;
-  let usedFlag = null;
-  for (const flag of flagsToTry) {
-    try {
-      success = cvModule.solvePnP(
-        objPts,
-        imgPts,
-        cameraMatrix,
-        distCoeffs,
-        rvec,
-        tvec,
-        useGuess,
-        flag
-      );
-      if (success) {
-        usedFlag = flag;
-        break;
-      }
-    } catch (e) {
-      logSolvePnpExceptionOncePer(750, { flag, useGuess, message: String(e?.message || e) });
-      // Continue to next flag.
-    }
-  }
+  const success = cvModule.solvePnP(
+    objPts,
+    imgPts,
+    cameraMatrix,
+    distCoeffs,
+    rvec,
+    tvec,
+    useGuess,
+    cvModule.SOLVEPNP_ITERATIVE
+  );
 
   imgPts.delete();
   objPts.delete();
 
   if (!success) {
-    // Throttled diagnostics to help debug point ordering / scale / intrinsics mismatch.
-    logSolvePnpFailOncePer(750, {
-      usedFlag,
-      useGuess,
-      imagePoints,
-      objectPoints,
-      intrinsics: cameraMatrix ? {
-        w: cameraMatrix.cols,
-        h: cameraMatrix.rows,
-        fx: cameraMatrix.data64F ? cameraMatrix.data64F[0] : null,
-        fy: cameraMatrix.data64F ? cameraMatrix.data64F[4] : null,
-        cx: cameraMatrix.data64F ? cameraMatrix.data64F[2] : null,
-        cy: cameraMatrix.data64F ? cameraMatrix.data64F[5] : null
-      } : null
-    });
     rvec.delete();
     tvec.delete();
     return null;
