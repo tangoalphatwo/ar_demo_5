@@ -331,7 +331,8 @@ window.addEventListener('load', () => {
 
       renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
       // Many GLB exports are Y-forward; Three.js expects -Z forward. Rotate so the model faces forward.
-      renderer.model.rotation.set(-Math.PI / 2, 0, 0);
+      // If the model appears upside down, add a 180° roll (Z).
+      renderer.model.rotation.set(-Math.PI / 2, 0, Math.PI);
       renderer.model.scale.setScalar(0.002); // 2x larger than before
 
       const scaledSize = renderer.computeBoundingSize(renderer.model);
