@@ -330,7 +330,9 @@ window.addEventListener('load', () => {
       if (nativeSize) console.log('Model native bbox (scene units):', nativeSize);
 
       renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
-      renderer.model.scale.setScalar(0.001); // model is large; scale down to fit marker
+      // Many GLB exports are Y-forward; Three.js expects -Z forward. Rotate so the model faces forward.
+      renderer.model.rotation.set(-Math.PI / 2, 0, 0);
+      renderer.model.scale.setScalar(0.002); // 2x larger than before
 
       const scaledSize = renderer.computeBoundingSize(renderer.model);
       if (scaledSize) console.log('Model scaled bbox (scene units):', scaledSize);
