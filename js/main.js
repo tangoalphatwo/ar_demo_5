@@ -600,8 +600,7 @@ window.addEventListener('load', () => {
           if (justAcquired) loggedReacquireRejection = false;
 
           // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
-          const orderedCorners = orderQuadTLTRBRBL(cornersProc);
-          const imagePtsScaled = orderedCorners.map(procPointToVideo);
+          const imagePtsScaled = cornersProc.map(procPointToVideo);
 
           const half = 0.1016 / 2; // 4 inches in meters
           const objectPoints = [
