@@ -111,17 +111,17 @@ window.addEventListener('load', () => {
     return dist > 0.25;
   }
 
-  function orderQuadTLTRBRBL(pts) {
-    if (!pts || pts.length !== 4) return pts;
-    // Standard TL/TR/BR/BL ordering based on sums/diffs
-    const sums = pts.map(p => p.x + p.y);
-    const diffs = pts.map(p => p.x - p.y);
-    const tl = pts[sums.indexOf(Math.min(...sums))];
-    const br = pts[sums.indexOf(Math.max(...sums))];
-    const tr = pts[diffs.indexOf(Math.max(...diffs))];
-    const bl = pts[diffs.indexOf(Math.min(...diffs))];
-    return [tl, tr, br, bl];
-  }
+  // function orderQuadTLTRBRBL(pts) {
+  //   if (!pts || pts.length !== 4) return pts;
+  //   // Standard TL/TR/BR/BL ordering based on sums/diffs
+  //   const sums = pts.map(p => p.x + p.y);
+  //   const diffs = pts.map(p => p.x - p.y);
+  //   const tl = pts[sums.indexOf(Math.min(...sums))];
+  //   const br = pts[sums.indexOf(Math.max(...sums))];
+  //   const tr = pts[diffs.indexOf(Math.max(...diffs))];
+  //   const bl = pts[diffs.indexOf(Math.min(...diffs))];
+  //   return [tl, tr, br, bl];
+  // }
 
   function poseLooksPlausible(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) return false;
@@ -533,202 +533,113 @@ window.addEventListener('load', () => {
     cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
 
     // --- Marker-based pose (WorldZeroMarker.png, 4" x 4") ---
-    try {
-      if (markerTracker) {
-        let cornersProc = null; // in processing canvas/backing coords
+try {
+  if (markerTracker) {
+    let cornersProc = null; // processing-canvas/backing-buffer coords
 
-        if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
-          const currPts = new cv.Mat();
-          const status = new cv.Mat();
-          const err = new cv.Mat();
-          cv.calcOpticalFlowPyrLK(markerPrevGray, gray, markerPrevPts, currPts, status, err);
-
-          let ok = status.rows === 4;
-          if (ok) {
-            for (let i = 0; i < 4; i++) {
-              if (status.data[i] !== 1) { ok = false; break; }
-            }
-          }
-
-          if (ok) {
-            cornersProc = [];
-            for (let i = 0; i < 4; i++) {
-              cornersProc.push({ x: currPts.data32F[i * 2], y: currPts.data32F[i * 2 + 1] });
-            }
-
-            markerPrevGray.delete();
-            markerPrevGray = gray.clone();
-            markerPrevPts.delete();
-            markerPrevPts = currPts;
-          } else {
-            currPts.delete();
-            markerTracking = false;
-            markerPrevGray.delete();
-            markerPrevGray = null;
-            markerPrevPts.delete();
-            markerPrevPts = null;
-          }
-
-          status.delete();
-          err.delete();
-        }
-
-        // If not currently tracking, (re)detect the marker using ORB+homography.
-        if (!cornersProc) {
-          const det = markerTracker.detect(gray);
-          if (det && det.corners && det.corners.length === 4) {
-            cornersProc = det.corners;
-
-            // Seed tracking state
-            markerPrevGray?.delete?.();
-            markerPrevGray = gray.clone();
-            markerPrevPts?.delete?.();
-            markerPrevPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-              cornersProc[0].x, cornersProc[0].y,
-              cornersProc[1].x, cornersProc[1].y,
-              cornersProc[2].x, cornersProc[2].y,
-              cornersProc[3].x, cornersProc[3].y
-            ]);
-            markerTracking = true;
-
-            det.homography?.delete?.();
-          }
-        }
-
-        if (cornersProc) {
-          const justAcquired = !lastHadMarker;
-          if (justAcquired) loggedReacquireRejection = false;
-
-          // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
-          const imagePtsScaled = cornersProc.map(procPointToVideo);
-
-          const half = 0.1016 / 2; // 4 inches in meters
-          const objectPoints = [
-            { x: -half, y: -half, z: 0 },
-            { x:  half, y: -half, z: 0 },
-            { x:  half, y:  half, z: 0 },
-            { x: -half, y:  half, z: 0 }
-          ];
-
-          const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
-          const poseOk = poseLooksPlausible(pose);
-          // On reacquire, allow snapping back even if the pose jump is large.
-          const acceptPose = !!pose && poseOk && (justAcquired || !poseJumpTooLarge(lastStableMarkerPose, pose));
-          if (acceptPose) {
-            lastStableMarkerPose = pose;
-            latestPose = pose;
-            renderer.setAnchorPose(pose);
-            logEvery(30, '[Marker] pose ok', pose.position);
-
-            // Learn SLAM metric scale when both marker pose and SLAM delta are available
-            if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
-              const dx = pose.position.x - lastMarkerPoseForScale.position.x;
-              const dy = pose.position.y - lastMarkerPoseForScale.position.y;
-              const dz = pose.position.z - lastMarkerPoseForScale.position.z;
-              const dMarker = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-              const dt = slamDelta.t;
-              const dSlam = Math.sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
-              if (dMarker > 1e-4 && dSlam > 1e-6) {
-                const s = dMarker / dSlam;
-                // Exponential moving average
-                slamMetricScale = slamMetricScale > 0 ? (0.9 * slamMetricScale + 0.1 * s) : s;
-                logEvery(60, '[SLAM] metric scale', slamMetricScale.toFixed(4));
-              }
-            }
-
-            lastMarkerPoseForScale = pose;
-            lastSlamDeltaForScale = slamDelta;
-          } else if (lastStableMarkerPose) {
-            // If we have a prior pose, keep it unless this is a reacquire attempt.
-            // Without SLAM, a stale pose looks "stuck to the screen", so hide on reacquire failures.
-            if (justAcquired || !slam) {
-              renderer.setAnchorPose(null);
-            } else {
-              renderer.setAnchorPose(lastStableMarkerPose);
-            }
-
-            if (pose && poseOk) {
-              logEvery(30, '[Marker] pose rejected (jump too large)', { prev: lastStableMarkerPose.position, next: pose.position });
-            } else if (pose && !poseOk) {
-              logEvery(30, '[Marker] pose rejected (implausible)', { next: pose.position });
-            }
-
-            if (pose && justAcquired && !loggedReacquireRejection) {
-              loggedReacquireRejection = true;
-              console.warn('[Marker] reacquired but pose rejected; keeping lastStable pose', {
-                prev: lastStableMarkerPose.position,
-                next: pose.position
-              });
-            }
-
-            // If pose is implausible, reset tracking so we don't keep following bad corners.
-            if (pose && !poseOk) {
-              markerTracking = false;
-              markerPrevGray?.delete?.();
-              markerPrevGray = null;
-              markerPrevPts?.delete?.();
-              markerPrevPts = null;
-            }
-          } else {
-            renderer.setAnchorPose(null);
-            if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
-          }
-
-          if (!lastHadMarker) console.log('[Marker] acquired');
-          lastHadMarker = true;
-          framesSinceMarker = 0;
-        } else {
-          // no marker in this frame
-          framesSinceMarker++;
-
-          // Without SLAM (camera tracking), we cannot keep a stable world anchor.
-          // Freezing the last pose makes the model look stuck to the screen.
-          if (!slam) {
-            renderer.setAnchorPose(null);
-            if (lastHadMarker) console.log('[Marker] lost');
-            lastHadMarker = false;
-            // keep lastStableMarkerPose around for debugging, but don't render it.
-            return requestAnimationFrame(loop);
-          }
-
-          // With SLAM enabled, propagate last known pose.
-          if (lastStableMarkerPose && slamDelta && slamDelta.R && slamDelta.t) {
-            const dR = slamDelta.R;
-            const dt = slamDelta.t;
-
-            // Convert SLAM delta translation into the same coordinate convention as pose.js
-            // pose.js flips Y, so do the same here.
-            const dtPose = { x: dt[0], y: -dt[1], z: dt[2] };
-
-            const scale = slamMetricScale > 0 ? slamMetricScale : 0.0; // if unknown, ignore translation
-            const dtScaled = { x: dtPose.x * scale, y: dtPose.y * scale, z: dtPose.z * scale };
-
-            // Propagate marker pose in camera coords: X2 = dR * X1 + dt
-            const newPos = mat3MulVec3(dR, lastStableMarkerPose.position);
-            newPos.x += dtScaled.x;
-            newPos.y += dtScaled.y;
-            newPos.z += dtScaled.z;
-
-            const newRot = lastStableMarkerPose.rotationMatrix
-              ? mat3MulMat3(dR, lastStableMarkerPose.rotationMatrix)
-              : null;
-
-            lastStableMarkerPose = {
-              ...lastStableMarkerPose,
-              position: newPos,
-              rotationMatrix: newRot || lastStableMarkerPose.rotationMatrix
-            };
-          }
-
-          renderer.setAnchorPose(lastStableMarkerPose);
-          if (lastHadMarker) console.log('[Marker] lost');
-          lastHadMarker = false;
-        }
-      }
-    } catch (e) {
-      console.warn('Marker pose error:', e);
+    // TEMP DEBUG BASELINE:
+    // Force fresh marker detection every frame.
+    // Do not use optical-flow corner tracking yet.
+    const det = markerTracker.detect(gray);
+    if (det && det.corners && det.corners.length === 4) {
+      cornersProc = det.corners;
+      det.homography?.delete?.();
     }
+
+    if (cornersProc) {
+      const justAcquired = !lastHadMarker;
+      if (justAcquired) loggedReacquireRejection = false;
+
+      // IMPORTANT:
+      // Do NOT reorder corners by screen TL/TR/BR/BL here.
+      // We want to preserve the marker detector's own corner identity/order.
+      const imagePtsScaled = cornersProc.map(procPointToVideo);
+
+      const half = 0.1016 / 2; // 4 inches in meters
+      const objectPoints = [
+        { x: -half, y: -half, z: 0 },
+        { x:  half, y: -half, z: 0 },
+        { x:  half, y:  half, z: 0 },
+        { x: -half, y:  half, z: 0 }
+      ];
+
+      const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
+      const poseOk = poseLooksPlausible(pose);
+
+      // On reacquire, allow snapping back even if the pose jump is large.
+      const acceptPose = !!pose && poseOk && (justAcquired || !poseJumpTooLarge(lastStableMarkerPose, pose));
+
+      if (acceptPose) {
+        lastStableMarkerPose = pose;
+        latestPose = pose;
+        renderer.setAnchorPose(pose);
+        logEvery(30, '[Marker] pose ok', pose.position);
+
+        // Learn SLAM metric scale when both marker pose and SLAM delta are available
+        if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
+          const dx = pose.position.x - lastMarkerPoseForScale.position.x;
+          const dy = pose.position.y - lastMarkerPoseForScale.position.y;
+          const dz = pose.position.z - lastMarkerPoseForScale.position.z;
+          const dMarker = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+          const dt = slamDelta.t;
+          const dSlam = Math.sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
+          if (dMarker > 1e-4 && dSlam > 1e-6) {
+            const s = dMarker / dSlam;
+            slamMetricScale = slamMetricScale > 0 ? (0.9 * slamMetricScale + 0.1 * s) : s;
+            logEvery(60, '[SLAM] metric scale', slamMetricScale.toFixed(4));
+          }
+        }
+
+        lastMarkerPoseForScale = pose;
+        lastSlamDeltaForScale = slamDelta;
+      } else if (lastStableMarkerPose) {
+        if (justAcquired || !slam) {
+          renderer.setAnchorPose(null);
+        } else {
+          renderer.setAnchorPose(lastStableMarkerPose);
+        }
+
+        if (pose && poseOk) {
+          logEvery(30, '[Marker] pose rejected (jump too large)', {
+            prev: lastStableMarkerPose.position,
+            next: pose.position
+          });
+        } else if (pose && !poseOk) {
+          logEvery(30, '[Marker] pose rejected (implausible)', {
+            next: pose.position
+          });
+        }
+
+        if (pose && justAcquired && !loggedReacquireRejection) {
+          loggedReacquireRejection = true;
+          console.warn('[Marker] reacquired but pose rejected; keeping lastStable pose', {
+            prev: lastStableMarkerPose.position,
+            next: pose.position
+          });
+        }
+      } else {
+        renderer.setAnchorPose(null);
+        if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
+      }
+
+      if (!lastHadMarker) console.log('[Marker] acquired');
+      lastHadMarker = true;
+      framesSinceMarker = 0;
+    } else {
+      // no marker in this frame
+      framesSinceMarker++;
+
+      // For this debug pass, hide content when marker is gone.
+      renderer.setAnchorPose(null);
+
+      if (lastHadMarker) console.log('[Marker] lost');
+      lastHadMarker = false;
+    }
+  }
+} catch (e) {
+  console.warn('Marker pose error:', e);
+}
 
     // Occasional pose debug
     if (showDebug && latestPose && debugInfo) {
