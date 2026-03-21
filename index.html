@@ -13,7 +13,8 @@
   
     var Module = {
       locateFile: function (path) {
-        return `https://docs.opencv.org/4.x/${path}`;
+        // Resolve OpenCV runtime assets (wasm/data/worker) relative to the local upload.
+        return `opencv/${path}`;
       },
       onRuntimeInitialized: function () {
         console.log("OpenCV runtime initialized (Module)");
@@ -23,11 +24,11 @@
   </script>
 
   <script>
-    // Always load the hosted OpenCV.js build from docs.opencv.org.
+    // Load the locally uploaded OpenCV.js build.
     (function () {
       const s = document.createElement('script');
       s.async = true;
-      s.src = 'https://docs.opencv.org/4.x/opencv.js';
+      s.src = 'opencv/opencv.js';
       document.head.appendChild(s);
     })();
   </script>
