@@ -623,7 +623,7 @@ window.addEventListener('load', () => {
           if (acceptPose) {
             lastStableMarkerPose = pose;
             latestPose = pose;
-            renderer.setCameraFromMarkerPose(pose);
+            renderer.setAnchorPose(pose);
             logEvery(30, '[Marker] pose ok', pose.position);
 
             // Learn SLAM metric scale when both marker pose and SLAM delta are available
