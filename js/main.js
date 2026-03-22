@@ -162,6 +162,18 @@ window.addEventListener('load', () => {
   
   async function initOpenCV() {
     console.log("Initializing OpenCV");
+
+    // Modularized OpenCV.js builds expose `cv` as a factory function.
+    // When loaded via a script tag, you must call it to get the Promise/module.
+    if (typeof window.cv === 'function') {
+      try {
+        console.log('[InitOpenCV] window.cv is a factory; instantiating with Module');
+        window.cv = window.cv(window.Module || {});
+      } catch (e) {
+        console.warn('[InitOpenCV] Failed to instantiate cv factory:', e);
+      }
+    }
+
     try {
       console.log('[InitOpenCV] __opencvReady:', window.__opencvReady);
       console.log('[InitOpenCV] window.cv type:', typeof window.cv);
@@ -275,6 +287,26 @@ window.addEventListener('load', () => {
           findFundamentalMat: typeof cvInstance?.findFundamentalMat === 'function'
         };
         console.log('[OpenCV] source:', window.__opencvSource || '(unknown)');
+
+        const hasBuildInfo = typeof cvInstance?.getBuildInformation === 'function';
+        console.log('[OpenCV] build information available:', hasBuildInfo);
+        if (hasBuildInfo) {
+          const info = String(cvInstance.getBuildInformation());
+          const snippet = info.split('\n').slice(0, 14).join('\n');
+          console.log('[OpenCV] build info (snippet):\n' + snippet);
+        }
+
+        // Help debug missing bindings: search for similarly-named exports.
+        try {
+          const names = Object.getOwnPropertyNames(cvInstance);
+          const related = names
+            .filter(n => /Pose|Essential|Fundamental|Calib3d|Epiline|Triang/i.test(n))
+            .slice(0, 60);
+          console.log('[OpenCV] related export names (sample):', related);
+        } catch (e) {
+          console.warn('[OpenCV] export-name scan failed:', e);
+        }
+
         console.log('[OpenCV] required APIs:', caps);
         const ok = caps.recoverPose && (caps.findEssentialMat || caps.findFundamentalMat);
         if (ok) {
