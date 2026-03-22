@@ -292,16 +292,29 @@ window.addEventListener('load', () => {
         console.log('[OpenCV] build information available:', hasBuildInfo);
         if (hasBuildInfo) {
           const info = String(cvInstance.getBuildInformation());
-          const snippet = info.split('\n').slice(0, 14).join('\n');
+          const lines = info.split('\n');
+          const snippet = lines.slice(0, 14).join('\n');
           console.log('[OpenCV] build info (snippet):\n' + snippet);
+
+          // Also print the module list (helps distinguish missing module vs missing JS binding).
+          const toBeBuiltIndex = lines.findIndex(l => /^\s*To be built:\s*/.test(l));
+          if (toBeBuiltIndex >= 0) {
+            const block = lines.slice(toBeBuiltIndex, toBeBuiltIndex + 6).join('\n');
+            console.log('[OpenCV] build info (modules):\n' + block);
+          }
         }
 
         // Help debug missing bindings: search for similarly-named exports.
         try {
           const names = Object.getOwnPropertyNames(cvInstance);
+          console.log('[OpenCV] export count:', names.length);
+
+          const byKeyword = names.filter(n => /recover|essential|fundamental/i.test(n));
+          console.log('[OpenCV] recover/essential/fundamental exports:', byKeyword);
+
           const related = names
-            .filter(n => /Pose|Essential|Fundamental|Calib3d|Epiline|Triang/i.test(n))
-            .slice(0, 60);
+            .filter(n => /Pose|Essential|Fundamental|Recover|Calib3d|Epiline|Triang/i.test(n))
+            .slice(0, 80);
           console.log('[OpenCV] related export names (sample):', related);
         } catch (e) {
           console.warn('[OpenCV] export-name scan failed:', e);
@@ -313,6 +326,13 @@ window.addEventListener('load', () => {
           console.log('[OpenCV] calib3d pose/epipolar check: PASS');
         } else {
           console.error('[OpenCV] calib3d pose/epipolar check: FAIL');
+          try {
+            console.error('[OpenCV] "in" checks:', {
+              recoverPose: 'recoverPose' in cvInstance,
+              findEssentialMat: 'findEssentialMat' in cvInstance,
+              findFundamentalMat: 'findFundamentalMat' in cvInstance
+            });
+          } catch {}
         }
       } catch (e) {
         console.warn('[OpenCV] capability check (post-init) failed:', e);
