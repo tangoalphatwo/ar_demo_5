@@ -335,7 +335,7 @@ window.addEventListener('load', () => {
       const nativeSize = renderer.computeBoundingSize(renderer.model);
       if (nativeSize) console.log('Model native bbox (scene units):', nativeSize);
 
-      renderer.model.position.set(0, 0, 0.02); // 2cm above marker plane
+      renderer.model.position.set(0, 0, -0.02); // 2cm above marker plane
       // Many GLB exports are Y-forward; Three.js expects -Z forward. Rotate so the model faces forward.
       // If the model appears upside down, add a 180° roll (Z).
       renderer.model.rotation.set(-Math.PI / 2, 0, Math.PI);
