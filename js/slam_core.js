@@ -1,7 +1,8 @@
 // slam_core.js
 export class SlamCore {
-    constructor(cv) {
+    constructor(cv, intrinsics = null) {
         this.cv = cv;
+        this.intrinsics = intrinsics;
 
         this.pose = {
             R: cv.Mat.eye(3, 3, cv.CV_64F),
@@ -93,8 +94,10 @@ export class SlamCore {
             goodCurr
         );
 
-        const fx = 600, fy = 600;
-        const cx = width / 2, cy = height / 2;
+        const fx = this.intrinsics?.fx ?? 600;
+        const fy = this.intrinsics?.fy ?? 600;
+        const cx = this.intrinsics?.cx ?? (width / 2);
+        const cy = this.intrinsics?.cy ?? (height / 2);
 
         const K = cv.matFromArray(3, 3, cv.CV_64F, [
             fx, 0, cx,
@@ -105,10 +108,10 @@ export class SlamCore {
         const mask = new cv.Mat();
         let E = null;
         if (cv.findEssentialMat) {
-            E = cv.findEssentialMat(currMat, prevMat, K, cv.RANSAC, 0.999, 1.0, mask);
+            E = cv.findEssentialMat(prevMat, currMat, K, cv.RANSAC, 0.999, 1.0, mask);
         } else if (cv.findFundamentalMat) {
             // Fallback: compute Fundamental matrix then convert to Essential: E = K^T * F * K
-            const F = cv.findFundamentalMat(currMat, prevMat, cv.FM_RANSAC, 3, 0.99, mask);
+            const F = cv.findFundamentalMat(prevMat, currMat, cv.FM_RANSAC, 3, 0.99, mask);
             try {
                 const Kt = new cv.Mat();
                 cv.transpose(K, Kt);
@@ -133,7 +136,7 @@ export class SlamCore {
 
         if (E) {
             try {
-                cv.recoverPose(E, currMat, prevMat, K, R, t, mask);
+                cv.recoverPose(E, prevMat, currMat, K, R, t, mask);
 
                 // Capture delta as plain JS arrays for the caller
                 const rArr = (R.data64F && Array.from(R.data64F)) || (R.data32F && Array.from(R.data32F)) || (R.data && Array.from(R.data));
@@ -161,9 +164,11 @@ export class SlamCore {
                         const pts1 = cv.matFromArray(2, n, cv.CV_64F, xs1.concat(ys1));
                         const pts2 = cv.matFromArray(2, n, cv.CV_64F, xs2.concat(ys2));
 
-                        // Camera intrinsics (same heuristic used elsewhere)
-                        const fx = 600, fy = 600;
-                        const cx = width / 2, cy = height / 2;
+                        // Camera intrinsics (prefer pose.js intrinsics; fall back to heuristic)
+                        const fx = this.intrinsics?.fx ?? 600;
+                        const fy = this.intrinsics?.fy ?? 600;
+                        const cx = this.intrinsics?.cx ?? (width / 2);
+                        const cy = this.intrinsics?.cy ?? (height / 2);
                         const Kmat = cv.matFromArray(3, 3, cv.CV_64F, [
                             fx, 0, cx,
                             0, fy, cy,

@@ -169,6 +169,61 @@ export class ARRenderer {
     this.anchor.visible = true;
   }
 
+  applySlamDelta(deltaR, deltaT, scale = 1.0) {
+    if (!deltaR || !deltaT) return;
+
+    // OpenCV -> Three conversion
+    // S = diag(1, -1, -1)
+    const r00 = deltaR[0], r01 = deltaR[1], r02 = deltaR[2];
+    const r10 = deltaR[3], r11 = deltaR[4], r12 = deltaR[5];
+    const r20 = deltaR[6], r21 = deltaR[7], r22 = deltaR[8];
+
+    const R = new THREE.Matrix3();
+    R.set(
+      r00, -r01, -r02,
+      -r10, r11, r12,
+      -r20, r21, r22
+    );
+
+    // OpenCV camera coords -> Three camera coords
+    const t = new THREE.Vector3(
+      deltaT[0] * scale,
+      -deltaT[1] * scale,
+      -deltaT[2] * scale
+    );
+
+    // recoverPose gives relative motion from prev camera to curr camera:
+    // X2 = R * X1 + t
+    // For a world camera transform, apply the inverse delta:
+    // inv(T) = [R^T, -R^T t]
+    const Rinv = R.clone().transpose();
+    const e = Rinv.elements;
+
+    const tx = t.x, ty = t.y, tz = t.z;
+    const tinv = new THREE.Vector3(
+      -(e[0] * tx + e[1] * ty + e[2] * tz),
+      -(e[3] * tx + e[4] * ty + e[5] * tz),
+      -(e[6] * tx + e[7] * ty + e[8] * tz)
+    );
+
+    const deltaInv = new THREE.Matrix4();
+    deltaInv.set(
+      e[0], e[1], e[2], tinv.x,
+      e[3], e[4], e[5], tinv.y,
+      e[6], e[7], e[8], tinv.z,
+      0, 0, 0, 1
+    );
+
+    this.camera.matrixAutoUpdate = false;
+    this.camera.matrix.multiply(deltaInv);
+    this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+
+    // Keep world origin at the marker anchor
+    this.anchor.position.set(0, 0, 0);
+    this.anchor.quaternion.set(0, 0, 0, 1);
+    this.anchor.visible = true;
+  }
+
   render() {
     this.renderer.render(this.scene, this.camera);
   }

@@ -78,6 +78,30 @@ export function initPose(video, cv) {
   distCoeffs = cvModule.Mat.zeros(4, 1, cvModule.CV_64F);
 }
 
+export function getPoseIntrinsics() {
+  if (!cameraMatrix) return null;
+
+  const read = (r, c, idx) => {
+    try {
+      if (typeof cameraMatrix.doubleAt === 'function') return cameraMatrix.doubleAt(r, c);
+      if (typeof cameraMatrix.doublePtr === 'function') return cameraMatrix.doublePtr(r, c)[0];
+      if (cameraMatrix.data64F) return cameraMatrix.data64F[idx];
+      if (cameraMatrix.data32F) return cameraMatrix.data32F[idx];
+      if (cameraMatrix.data) return cameraMatrix.data[idx];
+    } catch {
+      // fall through
+    }
+    return null;
+  };
+
+  return {
+    fx: read(0, 0, 0),
+    fy: read(1, 1, 4),
+    cx: read(0, 2, 2),
+    cy: read(1, 2, 5)
+  };
+}
+
 function toCvPoint2f(points) {
   const data = [];
   points.forEach(p => data.push(p.x, p.y));

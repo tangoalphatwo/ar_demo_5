@@ -2,7 +2,7 @@
 import { CameraManager } from './camera.js';
 import { ARRenderer } from './renderer.js';
 import { SlamCore } from './slam_core.js';
-import { initPose, estimatePose } from "./pose.js";
+import { initPose, estimatePose, getPoseIntrinsics } from "./pose.js";
 import { MarkerTracker } from './marker_tracker.js';
 
 window.addEventListener('load', () => {
@@ -299,7 +299,13 @@ window.addEventListener('load', () => {
       // Only enable SLAM if this OpenCV build has the required epipolar + pose recovery methods.
       const canSlam = !!(cvInstance.recoverPose && (cvInstance.findEssentialMat || cvInstance.findFundamentalMat));
       if (canSlam) {
-        slam = new SlamCore(cvInstance);
+        let intrinsics = null;
+        try {
+          intrinsics = getPoseIntrinsics();
+        } catch (e) {
+          console.warn('getPoseIntrinsics failed; falling back to heuristic intrinsics:', e);
+        }
+        slam = new SlamCore(cvInstance, intrinsics);
         console.log('[Init] SLAM enabled');
       } else {
         slam = null;
@@ -617,7 +623,7 @@ window.addEventListener('load', () => {
           if (acceptPose) {
             lastStableMarkerPose = pose;
             latestPose = pose;
-            renderer.setAnchorPose(pose);
+            renderer.setCameraFromMarkerPose(pose);
             logEvery(30, '[Marker] pose ok', pose.position);
 
             // Learn SLAM metric scale when both marker pose and SLAM delta are available
@@ -692,36 +698,14 @@ window.addEventListener('load', () => {
             return requestAnimationFrame(loop);
           }
 
-          // With SLAM enabled, propagate last known pose.
-          if (lastStableMarkerPose && slamDelta && slamDelta.R && slamDelta.t) {
-            const dR = slamDelta.R;
-            const dt = slamDelta.t;
-
-            // Convert SLAM delta translation into the same coordinate convention as pose.js
-            // pose.js flips Y, so do the same here.
-            const dtPose = { x: dt[0], y: -dt[1], z: dt[2] };
-
-            const scale = slamMetricScale > 0 ? slamMetricScale : 0.0; // if unknown, ignore translation
-            const dtScaled = { x: dtPose.x * scale, y: dtPose.y * scale, z: dtPose.z * scale };
-
-            // Propagate marker pose in camera coords: X2 = dR * X1 + dt
-            const newPos = mat3MulVec3(dR, lastStableMarkerPose.position);
-            newPos.x += dtScaled.x;
-            newPos.y += dtScaled.y;
-            newPos.z += dtScaled.z;
-
-            const newRot = lastStableMarkerPose.rotationMatrix
-              ? mat3MulMat3(dR, lastStableMarkerPose.rotationMatrix)
-              : null;
-
-            lastStableMarkerPose = {
-              ...lastStableMarkerPose,
-              position: newPos,
-              rotationMatrix: newRot || lastStableMarkerPose.rotationMatrix
-            };
+          // With SLAM enabled, keep the marker/world origin fixed and move the camera.
+          if (slamDelta && slamDelta.R && slamDelta.t) {
+            const scale = slamMetricScale > 0 ? slamMetricScale : 0.0;
+            renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
+          } else {
+            // no delta this frame; keep last camera pose
           }
 
-          renderer.setAnchorPose(lastStableMarkerPose);
           if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
         }
