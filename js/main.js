@@ -267,13 +267,32 @@ window.addEventListener('load', () => {
 
       console.log('[Init] OpenCV instance acquired');
 
+      // Verify the OpenCV build has the modules we expect (calib3d pose recovery).
+      try {
+        const caps = {
+          recoverPose: typeof cvInstance?.recoverPose === 'function',
+          findEssentialMat: typeof cvInstance?.findEssentialMat === 'function',
+          findFundamentalMat: typeof cvInstance?.findFundamentalMat === 'function'
+        };
+        console.log('[OpenCV] source:', window.__opencvSource || '(unknown)');
+        console.log('[OpenCV] required APIs:', caps);
+        const ok = caps.recoverPose && (caps.findEssentialMat || caps.findFundamentalMat);
+        if (ok) {
+          console.log('[OpenCV] calib3d pose/epipolar check: PASS');
+        } else {
+          console.error('[OpenCV] calib3d pose/epipolar check: FAIL');
+        }
+      } catch (e) {
+        console.warn('[OpenCV] capability check (post-init) failed:', e);
+      }
+
       // Let the UI paint before continuing into heavier initialization.
       await new Promise(r => setTimeout(r, 0));
 
       // Log capabilities on the next tick to avoid blocking startup.
       setTimeout(() => {
         try {
-          console.log('[OpenCV] mode:', 'hosted');
+          console.log('[OpenCV] mode:', window.__opencvSource ? 'local' : 'unknown');
           console.log('[OpenCV] capabilities:', {
             findEssentialMat: typeof cvInstance.findEssentialMat,
             findFundamentalMat: typeof cvInstance.findFundamentalMat,
