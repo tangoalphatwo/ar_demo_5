@@ -47,18 +47,19 @@ export class CameraManager {
 
     let drawWidth, drawHeight, offsetX, offsetY;
 
+    // COVER: fill the canvas completely (crop excess).
     if (canvasAspect > videoAspect) {
-      // Canvas is wider than video → pillarbox
-      drawHeight = canvasCssH;
-      drawWidth = drawHeight * videoAspect;
-      offsetX = (canvasCssW - drawWidth) / 2;
-      offsetY = 0;
-    } else {
-      // Canvas is taller than video → letterbox
+      // Canvas is wider than video → scale by width and crop vertically
       drawWidth = canvasCssW;
       drawHeight = drawWidth / videoAspect;
       offsetX = 0;
       offsetY = (canvasCssH - drawHeight) / 2;
+    } else {
+      // Canvas is taller than video → scale by height and crop horizontally
+      drawHeight = canvasCssH;
+      drawWidth = drawHeight * videoAspect;
+      offsetX = (canvasCssW - drawWidth) / 2;
+      offsetY = 0;
     }
 
     // Clear full backing buffer

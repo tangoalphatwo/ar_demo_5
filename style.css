@@ -4,6 +4,7 @@ html, body {
   overflow: hidden;
   background: white;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  height: 100%;
 }
 
 #camera {
@@ -12,21 +13,23 @@ html, body {
 
 #cvCanvas {
   position: fixed;
-  top: 0;
-  left: 0;
+  inset: 0;
   z-index: 1;
   pointer-events: none; /* IMPORTANT: keeps button clickable */
 
   width: 100vw;
+  width: 100dvw;
   height: 100vh;
+  height: 100dvh;
 }
 
 #threeCanvas {
   position: fixed;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100vw;
+  width: 100dvw;
   height: 100vh;
+  height: 100dvh;
   z-index: 2;
   pointer-events: none;
 }

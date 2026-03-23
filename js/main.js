@@ -286,8 +286,9 @@ window.addEventListener('load', () => {
       console.log('[Init] Camera playing', { w: videoEl.videoWidth, h: videoEl.videoHeight });
 
     function resizeCvCanvasToViewport() {
-      const cssW = Math.max(1, Math.round(window.innerWidth));
-      const cssH = Math.max(1, Math.round(window.innerHeight));
+      const vv = window.visualViewport;
+      const cssW = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
+      const cssH = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
       const dpr = window.devicePixelRatio || 1;
 
       // Backing buffer uses device pixels; CSS size uses CSS pixels
@@ -531,18 +532,19 @@ window.addEventListener('load', () => {
 
     let drawWidth, drawHeight, offsetX, offsetY;
 
+    // COVER: fill the canvas completely (crop excess).
     if (canvasAspect > videoAspect) {
-      // Canvas is wider than video → pillarbox
-      drawHeight = canvasCssH;
-      drawWidth = drawHeight * videoAspect;
-      offsetX = (canvasCssW - drawWidth) / 2;
-      offsetY = 0;
-    } else {
-      // Canvas is taller than video → letterbox
+      // Canvas is wider than video → scale by width and crop vertically
       drawWidth = canvasCssW;
       drawHeight = drawWidth / videoAspect;
       offsetX = 0;
       offsetY = (canvasCssH - drawHeight) / 2;
+    } else {
+      // Canvas is taller than video → scale by height and crop horizontally
+      drawHeight = canvasCssH;
+      drawWidth = drawHeight * videoAspect;
+      offsetX = (canvasCssW - drawWidth) / 2;
+      offsetY = 0;
     }
 
     // Clear the full backing buffer
@@ -1004,9 +1006,10 @@ window.addEventListener('load', () => {
     try {
       // Keep the camera frame canvas full-viewport.
       if (running) {
+        const vv = window.visualViewport;
         const dpr = window.devicePixelRatio || 1;
-        const cssW = Math.max(1, Math.round(window.innerWidth));
-        const cssH = Math.max(1, Math.round(window.innerHeight));
+        const cssW = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
+        const cssH = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
         cvCanvas.width = Math.round(cssW * dpr);
         cvCanvas.height = Math.round(cssH * dpr);
         cvCanvas.style.width = `${cssW}px`;
