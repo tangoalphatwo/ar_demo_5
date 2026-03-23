@@ -19,7 +19,10 @@
         // Prefer local assets for the uploaded OpenCV build.
         // (Some builds may not need this if they embed wasm/data.)
         const tag = window.__opencvAssetTag ? `?${encodeURIComponent(window.__opencvAssetTag)}` : '';
-        return `opencv/${path}${tag}`;
+        const url = `opencv/${path}${tag}`;
+        // Helpful for verifying which wasm/data filenames the build is requesting.
+        try { console.log('[OpenCV] locateFile:', path, '->', url); } catch {}
+        return url;
       },
       onRuntimeInitialized: function () {
         console.log("OpenCV runtime initialized (Module)");
