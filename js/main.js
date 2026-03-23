@@ -163,6 +163,36 @@ window.addEventListener('load', () => {
   async function initOpenCV() {
     console.log("Initializing OpenCV");
 
+    // Log which OpenCV artifacts the page is actually serving (useful for GitHub Pages caching).
+    // This checks HTTP headers (ETag/Last-Modified/Content-Length) without downloading full files.
+    try {
+      const assetTag = window.__opencvAssetTag ? String(window.__opencvAssetTag) : '';
+      const suffix = assetTag ? `?${encodeURIComponent(assetTag)}` : '';
+      const jsUrl = `opencv/opencv.js${suffix}`;
+      const wasmUrl = (window.Module && typeof window.Module.locateFile === 'function')
+        ? window.Module.locateFile('opencv_js.wasm')
+        : `opencv/opencv_js.wasm${suffix}`;
+
+      const head = async (url) => {
+        const res = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+        const h = res.headers;
+        console.log('[OpenCV][HEAD]', url, {
+          ok: res.ok,
+          status: res.status,
+          etag: h.get('etag'),
+          lastModified: h.get('last-modified'),
+          contentLength: h.get('content-length'),
+          contentType: h.get('content-type')
+        });
+      };
+
+      // Fire and forget: diagnostics only.
+      head(jsUrl);
+      head(wasmUrl);
+    } catch (e) {
+      console.warn('[OpenCV] asset HEAD diagnostics failed:', e);
+    }
+
     // If OpenCV is still loading, wait briefly (handles cache-busted dynamic script load).
     if (!window.__opencvReady && !window.cv) {
       const start = performance.now();
@@ -255,27 +285,25 @@ window.addEventListener('load', () => {
       await videoEl.play();
       console.log('[Init] Camera playing', { w: videoEl.videoWidth, h: videoEl.videoHeight });
 
-    const videoW = videoEl.videoWidth;
-    const videoH = videoEl.videoHeight;
+    function resizeCvCanvasToViewport() {
+      const cssW = Math.max(1, Math.round(window.innerWidth));
+      const cssH = Math.max(1, Math.round(window.innerHeight));
+      const dpr = window.devicePixelRatio || 1;
 
-    // Fit the canvas to the viewport while preserving the video's aspect ratio
-    const maxW = window.innerWidth;
-    const maxH = window.innerHeight;
-    const scale = Math.min(maxW / videoW, maxH / videoH, 1); // don't upscale beyond native
-    const displayW = Math.round(videoW * scale);
-    const displayH = Math.round(videoH * scale);
+      // Backing buffer uses device pixels; CSS size uses CSS pixels
+      cvCanvas.width = Math.round(cssW * dpr);
+      cvCanvas.height = Math.round(cssH * dpr);
+      cvCanvas.style.width = `${cssW}px`;
+      cvCanvas.style.height = `${cssH}px`;
+      cvCanvas.style.left = '0px';
+      cvCanvas.style.top = '0px';
 
-    const dpr = window.devicePixelRatio || 1;
+      // Ensure 2D context maps CSS pixels correctly onto the backing buffer
+      const cvCtx = cvCanvas.getContext('2d');
+      cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
 
-    // Backing buffer uses device pixels; CSS size uses CSS pixels
-    cvCanvas.width = Math.round(displayW * dpr);
-    cvCanvas.height = Math.round(displayH * dpr);
-    cvCanvas.style.width = `${displayW}px`;
-    cvCanvas.style.height = `${displayH}px`;
-
-    // Ensure 2D context maps CSS pixels correctly onto the backing buffer
-    const cvCtx = cvCanvas.getContext('2d');
-    cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    resizeCvCanvasToViewport();
 
       statusEl.textContent = "Initializing OpenCV...";
       console.log('[Init] Before initOpenCV await');
@@ -972,5 +1000,23 @@ window.addEventListener('load', () => {
     requestAnimationFrame(loop); // KEEP GOING
   }
 
-  window.addEventListener('resize', () => renderer.resize());
+  window.addEventListener('resize', () => {
+    try {
+      // Keep the camera frame canvas full-viewport.
+      if (running) {
+        const dpr = window.devicePixelRatio || 1;
+        const cssW = Math.max(1, Math.round(window.innerWidth));
+        const cssH = Math.max(1, Math.round(window.innerHeight));
+        cvCanvas.width = Math.round(cssW * dpr);
+        cvCanvas.height = Math.round(cssH * dpr);
+        cvCanvas.style.width = `${cssW}px`;
+        cvCanvas.style.height = `${cssH}px`;
+        const cvCtx = cvCanvas.getContext('2d');
+        cvCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+    } catch (e) {
+      console.warn('[Resize] cvCanvas resize failed:', e);
+    }
+    renderer.resize();
+  });
 });
