@@ -163,6 +163,18 @@ window.addEventListener('load', () => {
   async function initOpenCV() {
     console.log("Initializing OpenCV");
 
+    // If OpenCV is still loading, wait briefly (handles cache-busted dynamic script load).
+    if (!window.__opencvReady && !window.cv) {
+      const start = performance.now();
+      const timeoutMs = 8000;
+      while (!window.__opencvReady && !window.cv && (performance.now() - start) < timeoutMs) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      if (!window.__opencvReady && !window.cv) {
+        console.warn('[InitOpenCV] Timed out waiting for OpenCV to load');
+      }
+    }
+
     // Modularized OpenCV.js builds expose `cv` as a factory function.
     // When loaded via a script tag, you must call it to get the Promise/module.
     if (typeof window.cv === 'function') {

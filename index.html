@@ -11,22 +11,30 @@
   <script>
     window.__opencvReady = false;
     window.__opencvSource = 'opencv/opencv.js';
+    // Bump this string whenever you upload a new OpenCV build to avoid stale browser caches.
+    window.__opencvAssetTag = 'v1';
   
     var Module = {
       locateFile: function (path) {
         // Prefer local assets for the uploaded OpenCV build.
         // (Some builds may not need this if they embed wasm/data.)
-        return `opencv/${path}`;
+        const tag = window.__opencvAssetTag ? `?${encodeURIComponent(window.__opencvAssetTag)}` : '';
+        return `opencv/${path}${tag}`;
       },
       onRuntimeInitialized: function () {
         console.log("OpenCV runtime initialized (Module)");
         window.__opencvReady = true;
 
+        console.log('[OpenCV] asset tag:', window.__opencvAssetTag);
+
         // Optional sanity check: confirm the wasm artifact is reachable from the server.
         // This doesn't guarantee the runtime used it, but it quickly catches "404 wasm" issues.
         try {
-          fetch('opencv/opencv_js.wasm', { method: 'HEAD' })
-            .then(r => console.log('[OpenCV] wasm HEAD', { url: 'opencv/opencv_js.wasm', ok: r.ok, status: r.status }))
+          const wasmUrl = (Module && typeof Module.locateFile === 'function')
+            ? Module.locateFile('opencv_js.wasm')
+            : 'opencv/opencv_js.wasm';
+          fetch(wasmUrl, { method: 'HEAD' })
+            .then(r => console.log('[OpenCV] wasm HEAD', { url: wasmUrl, ok: r.ok, status: r.status }))
             .catch(e => console.warn('[OpenCV] wasm HEAD failed:', e));
         } catch (e) {
           console.warn('[OpenCV] wasm HEAD check unavailable:', e);
@@ -80,7 +88,18 @@
     };
   </script>
 
-  <script defer src="opencv/opencv.js"></script>
+  <script>
+    // Load OpenCV with a cache-busting tag so updated uploads are actually fetched.
+    (function () {
+      const tag = window.__opencvAssetTag ? String(window.__opencvAssetTag) : '';
+      const suffix = tag ? `?${encodeURIComponent(tag)}` : '';
+      const s = document.createElement('script');
+      s.src = `opencv/opencv.js${suffix}`;
+      // Ensure deterministic execution order relative to other classic scripts.
+      s.async = false;
+      document.head.appendChild(s);
+    })();
+  </script>
   <script type="module" src="js/main.js"></script>
 
 </head>
