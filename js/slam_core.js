@@ -136,7 +136,18 @@ export class SlamCore {
 
         if (E) {
             try {
-                cv.recoverPose(E, prevMat, currMat, K, R, t, mask);
+                // OpenCV.js bindings often do not expose the 7-arg recoverPose overload.
+                // Prefer the 9-arg variant: (E, points1, points2, K, R, t, distanceThresh, mask, triangulatedPoints)
+                const triangulatedPoints = new cv.Mat();
+                const distanceThresh = 3.0; // pixels
+                try {
+                    cv.recoverPose(E, prevMat, currMat, K, R, t, distanceThresh, mask, triangulatedPoints);
+                } catch (e) {
+                    // Fallback for builds that do have the 7-arg overload.
+                    cv.recoverPose(E, prevMat, currMat, K, R, t, mask);
+                } finally {
+                    triangulatedPoints.delete();
+                }
 
                 // Capture delta as plain JS arrays for the caller
                 const rArr = (R.data64F && Array.from(R.data64F)) || (R.data32F && Array.from(R.data32F)) || (R.data && Array.from(R.data));
@@ -240,6 +251,8 @@ export class SlamCore {
 
         if (mask && mask.delete) mask.delete();
         if (prevMat && prevMat.delete) prevMat.delete();
+        if (currMat && currMat.delete) currMat.delete();
+        if (K && K.delete) K.delete();
 
         return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D, delta: this.lastDelta };
     }
