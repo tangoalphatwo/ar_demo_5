@@ -74,25 +74,24 @@ export class SlamCore {
             }
         }
 
+        // Done with LK output mats (we copy data into JS arrays above)
+        currPoints.delete();
+        status.delete();
+
         if (goodPrev.length < 16) {
+            if (this.prevGray) this.prevGray.delete();
             this.prevGray = this.currGray.clone();
+            if (this.prevPoints) this.prevPoints.delete();
             this.prevPoints = this._detectFeatures(this.prevGray);
             return { pose: this.pose, mapPoints: this.mapPoints };
         }
 
-        const prevMat = cv.matFromArray(
-            goodPrev.length / 2,
-            1,
-            cv.CV_32FC2,
-            goodPrev
-        );
-
-        const currMat = cv.matFromArray(
-            goodCurr.length / 2,
-            1,
-            cv.CV_32FC2,
-            goodCurr
-        );
+        const nGood = goodPrev.length / 2;
+        // For essential matrix / recoverPose, use a conservative, widely-supported format: Nx2 CV_64F
+        const prevMat = cv.matFromArray(nGood, 2, cv.CV_64F, goodPrev);
+        const currMat = cv.matFromArray(nGood, 2, cv.CV_64F, goodCurr);
+        // For LK state into the next frame, preserve the typical Nx1 CV_32FC2 format
+        const currMatFlow = cv.matFromArray(nGood, 1, cv.CV_32FC2, goodCurr);
 
         const fx = this.intrinsics?.fx ?? 600;
         const fy = this.intrinsics?.fy ?? 600;
@@ -143,8 +142,21 @@ export class SlamCore {
                 try {
                     cv.recoverPose(E, prevMat, currMat, K, R, t, distanceThresh, mask, triangulatedPoints);
                 } catch (e) {
-                    // Fallback for builds that do have the 7-arg overload.
-                    cv.recoverPose(E, prevMat, currMat, K, R, t, mask);
+                    const matInfo = (m) => (m && typeof m.rows === 'number')
+                        ? { rows: m.rows, cols: m.cols, type: (typeof m.type === 'function' ? m.type() : undefined) }
+                        : null;
+                    console.warn('recoverPose(9 args) threw:', e, {
+                        E: matInfo(E),
+                        points1: matInfo(prevMat),
+                        points2: matInfo(currMat),
+                        K: matInfo(K),
+                        R: matInfo(R),
+                        t: matInfo(t),
+                        mask: matInfo(mask),
+                        triangulatedPoints: matInfo(triangulatedPoints),
+                        distanceThresh
+                    });
+                    throw e;
                 } finally {
                     triangulatedPoints.delete();
                 }
@@ -156,8 +168,13 @@ export class SlamCore {
                     this.lastDelta = { R: rArr.slice(0, 9), t: tArr.slice(0, 3) };
                 }
 
-                this.pose.R = R.mul(this.pose.R);
-                this.pose.t = this._addTrans(this.pose.t, t);
+                const newPoseR = R.mul(this.pose.R);
+                if (this.pose.R) this.pose.R.delete();
+                this.pose.R = newPoseR;
+
+                const newPoseT = this._addTrans(this.pose.t, t);
+                if (this.pose.t) this.pose.t.delete();
+                this.pose.t = newPoseT;
 
                 // Triangulate matched points into 3D (camera1 coordinate system)
                 this.mapPoints3D = [];
@@ -229,15 +246,19 @@ export class SlamCore {
                     console.warn('Triangulation failed:', err);
                 }
 
+                if (this.prevGray) this.prevGray.delete();
                 this.prevGray = this.currGray.clone();
-                this.prevPoints = currMat.clone();
+                if (this.prevPoints) this.prevPoints.delete();
+                this.prevPoints = currMatFlow.clone();
 
             } catch (err) {
                 console.warn('recoverPose failed:', err);
                 // Keep previous pose and skip triangulation for this frame
                 this.mapPoints3D = [];
+                if (this.prevGray) this.prevGray.delete();
                 this.prevGray = this.currGray.clone();
-                this.prevPoints = currMat.clone();
+                if (this.prevPoints) this.prevPoints.delete();
+                this.prevPoints = currMatFlow.clone();
             }
 
             if (E && E.delete) E.delete();
@@ -245,13 +266,16 @@ export class SlamCore {
             // No essential matrix computed; skip pose update and triangulation this frame
             console.warn('Skipping pose recovery: no essential/fundamental computation available for this frame');
             this.mapPoints3D = [];
+            if (this.prevGray) this.prevGray.delete();
             this.prevGray = this.currGray.clone();
-            this.prevPoints = currMat.clone();
+            if (this.prevPoints) this.prevPoints.delete();
+            this.prevPoints = currMatFlow.clone();
         }
 
         if (mask && mask.delete) mask.delete();
         if (prevMat && prevMat.delete) prevMat.delete();
         if (currMat && currMat.delete) currMat.delete();
+        if (currMatFlow && currMatFlow.delete) currMatFlow.delete();
         if (K && K.delete) K.delete();
 
         return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: this.mapPoints3D, delta: this.lastDelta };
