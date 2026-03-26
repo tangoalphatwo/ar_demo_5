@@ -115,9 +115,13 @@ export class SlamCore {
                 const Kt = new cv.Mat();
                 cv.transpose(K, Kt);
                 const tmp = new cv.Mat();
-                cv.gemm(Kt, F, 1, new cv.Mat(), 0, tmp);
+                const empty1 = new cv.Mat();
+                cv.gemm(Kt, F, 1, empty1, 0, tmp);
+                empty1.delete();
                 E = new cv.Mat();
-                cv.gemm(tmp, K, 1, new cv.Mat(), 0, E);
+                const empty2 = new cv.Mat();
+                cv.gemm(tmp, K, 1, empty2, 0, E);
+                empty2.delete();
                 tmp.delete();
                 Kt.delete();
             } catch (err) {
@@ -222,7 +226,9 @@ export class SlamCore {
                         }
 
                         const P2 = new cv.Mat();
-                        cv.gemm(Kmat, Rt, 1, new cv.Mat(), 0, P2);
+                        const empty3 = new cv.Mat();
+                        cv.gemm(Kmat, Rt, 1, empty3, 0, P2);
+                        empty3.delete();
 
                         const points4D = new cv.Mat();
                         cv.triangulatePoints(P1, P2, pts1, pts2, points4D);
@@ -251,6 +257,10 @@ export class SlamCore {
                 if (this.prevPoints) this.prevPoints.delete();
                 this.prevPoints = currMatFlow.clone();
 
+                // Free per-frame pose mats after use
+                R.delete();
+                t.delete();
+
             } catch (err) {
                 console.warn('recoverPose failed:', err);
                 // Keep previous pose and skip triangulation for this frame
@@ -259,6 +269,10 @@ export class SlamCore {
                 this.prevGray = this.currGray.clone();
                 if (this.prevPoints) this.prevPoints.delete();
                 this.prevPoints = currMatFlow.clone();
+
+                // Free per-frame pose mats on failure too
+                R.delete();
+                t.delete();
             }
 
             if (E && E.delete) E.delete();
@@ -270,6 +284,9 @@ export class SlamCore {
             this.prevGray = this.currGray.clone();
             if (this.prevPoints) this.prevPoints.delete();
             this.prevPoints = currMatFlow.clone();
+
+            R.delete();
+            t.delete();
         }
 
         if (mask && mask.delete) mask.delete();
