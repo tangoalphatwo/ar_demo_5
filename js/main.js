@@ -72,13 +72,9 @@ window.addEventListener('load', () => {
   let markerPrevPts = null; // cv.Mat 4x1 CV_32FC2
   let lastStableMarkerPose = null;
 
-  // World-zero calibration: once we’ve seen a good marker pose, we treat that marker
-  // coordinate frame as world origin and keep the model persistent using SLAM.
-  let worldLocked = false;
-
   // SLAM scale estimation using marker PnP while marker is visible
   let slamMetricScale = 0.0;
-  let lastCameraPosForScale = null; // {x,y,z} in world meters (from marker)
+  let lastMarkerPoseForScale = null;
 
   function mat3MulVec3(r, v) {
     return {
@@ -739,48 +735,36 @@ window.addEventListener('load', () => {
           if (acceptPose) {
             lastStableMarkerPose = pose;
             latestPose = pose;
-            // Marker defines world origin; update camera from marker pose (content stays at origin).
-            renderer.setCameraFromMarkerPose(pose);
-
-            if (!worldLocked) {
-              worldLocked = true;
-              console.log('[World] locked to marker');
-              showToast('World locked');
-            }
+            // Known-good path: render content directly from marker pose.
+            renderer.setAnchorPose(pose);
             logEvery(30, '[Marker] pose ok', pose.position);
 
             // Learn SLAM metric scale when both marker pose and SLAM delta are available
-            if (slamDelta && slamDelta.R && slamDelta.t && renderer?.camera) {
-              const cam = renderer.camera.position;
-              if (lastCameraPosForScale) {
-                const dx = cam.x - lastCameraPosForScale.x;
-                const dy = cam.y - lastCameraPosForScale.y;
-                const dz = cam.z - lastCameraPosForScale.z;
-                const dWorld = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
+              const dx = pose.position.x - lastMarkerPoseForScale.position.x;
+              const dy = pose.position.y - lastMarkerPoseForScale.position.y;
+              const dz = pose.position.z - lastMarkerPoseForScale.position.z;
+              const dMarker = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-                const dt = slamDelta.t;
-                const dSlam = Math.sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
-                if (dWorld > 1e-4 && dSlam > 1e-6) {
-                  const s = dWorld / dSlam;
-                  // Exponential moving average
-                  slamMetricScale = slamMetricScale > 0 ? (0.9 * slamMetricScale + 0.1 * s) : s;
-                  logEvery(60, '[SLAM] metric scale', slamMetricScale.toFixed(4));
-                }
+              const dt = slamDelta.t;
+              const dSlam = Math.sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
+              if (dMarker > 1e-4 && dSlam > 1e-6) {
+                const s = dMarker / dSlam;
+                // Exponential moving average
+                slamMetricScale = slamMetricScale > 0 ? (0.9 * slamMetricScale + 0.1 * s) : s;
+                logEvery(60, '[SLAM] metric scale', slamMetricScale.toFixed(4));
               }
-
-              lastCameraPosForScale = { x: cam.x, y: cam.y, z: cam.z };
             }
+
+            lastMarkerPoseForScale = pose;
           } else if (lastStableMarkerPose) {
             // If we have a prior pose, keep it unless this is a reacquire attempt.
             // Without SLAM, a stale pose looks "stuck to the screen", so hide on reacquire failures.
-            if (!worldLocked) {
-              // We haven’t calibrated yet; hide content until we get a good marker pose.
-              renderer.setCameraFromMarkerPose(null);
-            } else if (slamDelta && slamDelta.R && slamDelta.t) {
-              // Marker pose looks bad; fall back to SLAM for continuity.
-              const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-              renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
-            } // else: keep last camera pose
+            if (justAcquired || !slam) {
+              renderer.setAnchorPose(null);
+            } else {
+              renderer.setAnchorPose(lastStableMarkerPose);
+            }
 
             if (pose && poseOk) {
               logEvery(30, '[Marker] pose rejected (jump too large)', { prev: lastStableMarkerPose.position, next: pose.position });
@@ -805,7 +789,7 @@ window.addEventListener('load', () => {
               markerPrevPts = null;
             }
           } else {
-            if (!worldLocked) renderer.setCameraFromMarkerPose(null);
+            renderer.setAnchorPose(null);
             if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
           }
 
@@ -819,18 +803,17 @@ window.addEventListener('load', () => {
           // Without SLAM (camera tracking), we cannot keep a stable world anchor.
           // Freezing the last pose makes the model look stuck to the screen.
           if (!slam) {
-            renderer.setCameraFromMarkerPose(null);
+            renderer.setAnchorPose(null);
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
             // keep lastStableMarkerPose around for debugging, but don't render it.
             return requestAnimationFrame(loop);
           }
 
-          // With SLAM enabled, keep the marker/world origin fixed and move the camera.
-          // Only do this after we’ve locked world-zero from the marker at least once.
-          if (worldLocked && slamDelta && slamDelta.R && slamDelta.t) {
+          // With SLAM enabled, we'll update the content pose using SLAM deltas (see renderer).
+          if (slamDelta && slamDelta.R && slamDelta.t) {
             const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-            renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
+            renderer.applySlamDeltaToAnchor?.(slamDelta.R, slamDelta.t, scale);
           } else {
             // no delta this frame; keep last camera pose
           }

@@ -187,6 +187,39 @@ export class ARRenderer {
     this.anchor.visible = true;
   }
 
+  // Alternate persistence path: keep the camera fixed and update the anchored content
+  // directly using the per-frame SLAM delta (camera1->camera2): X2 = R*X1 + t.
+  // If anchor represents object->camera transform in the current camera frame, then
+  // T_c2_o = T21 * T_c1_o.
+  applySlamDeltaToAnchor(deltaR, deltaT, scale = 1.0) {
+    if (!deltaR || !deltaT) return;
+    if (!this.anchor.visible) return;
+
+    const r00 = deltaR[0], r01 = deltaR[1], r02 = deltaR[2];
+    const r10 = deltaR[3], r11 = deltaR[4], r12 = deltaR[5];
+    const r20 = deltaR[6], r21 = deltaR[7], r22 = deltaR[8];
+
+    const t = new THREE.Vector3(
+      deltaT[0] * scale,
+      -deltaT[1] * scale,
+      -deltaT[2] * scale
+    );
+
+    const T21 = new THREE.Matrix4();
+    T21.set(
+      r00, -r01, -r02, t.x,
+      -r10, r11, r12, t.y,
+      -r20, r21, r22, t.z,
+      0, 0, 0, 1
+    );
+
+    // Ensure anchor.matrix matches position/quaternion before applying.
+    this.anchor.updateMatrix();
+    this.anchor.matrix.premultiply(T21);
+    this.anchor.matrix.decompose(this.anchor.position, this.anchor.quaternion, this.anchor.scale);
+    this.anchor.updateMatrixWorld(true);
+  }
+
   render() {
     this.renderer.render(this.scene, this.camera);
   }
