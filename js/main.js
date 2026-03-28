@@ -12,10 +12,22 @@ window.addEventListener('load', () => {
   const startBtn = document.getElementById('startBtn');
   const statusEl = document.getElementById('status');
   const debugToggle = document.getElementById('debugToggle');
+  const setWorldZeroBtn = document.getElementById('setWorldZeroBtn');
   const debugInfo = document.getElementById('debugInfo');
 
   const camera = new CameraManager(videoEl, cvCanvas);
   const renderer = new ARRenderer(threeCanvas);
+
+  // Restore persisted world-zero + house pose as early as possible.
+  // (Content remains hidden until the marker/world root becomes visible.)
+  try {
+    const restored = renderer.restorePersistedHouse?.();
+    if (restored?.worldZeroLoaded || restored?.housePoseLoaded) {
+      console.log('[Persist] restored', restored);
+    }
+  } catch (e) {
+    console.warn('[Persist] restore failed:', e);
+  }
 
   let debugFeaturePoints = [];
   let showDebug = false;
@@ -49,6 +61,22 @@ window.addEventListener('load', () => {
       toastEl.setAttribute('aria-hidden', 'true');
       toastTimer = setTimeout(() => { toastEl.hidden = true; toastTimer = null; }, 180);
     }, duration);
+  }
+
+  if (setWorldZeroBtn) {
+    setWorldZeroBtn.addEventListener('click', () => {
+      try {
+        if (!renderer?.worldZeroRoot?.visible) {
+          showToast('Show marker first');
+          return;
+        }
+        renderer.setWorldZero?.();
+        showToast('World zero set');
+      } catch (e) {
+        console.warn('[WorldZero] set failed:', e);
+        showToast('Failed to set world zero');
+      }
+    });
   }
 
   let running = false;
@@ -455,7 +483,7 @@ window.addEventListener('load', () => {
       const scaledSize = renderer.computeBoundingSize(renderer.model);
       if (scaledSize) console.log('Model scaled bbox (scene units):', scaledSize);
 
-        renderer.anchor.add(renderer.model);
+        renderer.houseRoot.add(renderer.model);
         avocadoLoaded = true;
         console.log('[Init] Model loaded + attached');
         showToast('House loaded');
@@ -473,6 +501,9 @@ window.addEventListener('load', () => {
         debugToggle.hidden = false;
         debugToggle.setAttribute('aria-pressed', 'false');
         debugToggle.textContent = 'Show Debug';
+      }
+      if (setWorldZeroBtn) {
+        setWorldZeroBtn.hidden = false;
       }
       if (debugInfo) {
         debugInfo.hidden = true;

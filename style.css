@@ -67,6 +67,16 @@ html, body {
   font-weight: 600;
 }
 
+#setWorldZeroBtn {
+  margin-left: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  border: none;
+  background: #2f2f2f;
+  color: #fff;
+  font-weight: 600;
+}
+
 #toast {
   position: fixed;
   left: 50%;
