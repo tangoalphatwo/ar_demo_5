@@ -28,12 +28,11 @@ export class ARRenderer {
     this.bgMesh = null;
 
     // --- World zero + content roots ---
-    // Architecture B: keep content in a fixed world frame and move the Three.js camera.
-    // We use the marker pose to initialize/refresh the camera world transform, and SLAM
-    // deltas to keep updating the camera when the marker is not visible.
+    // In this demo, we keep the Three.js camera fixed and move the world root
+    // (because solvePnP yields marker->camera). Treat this root as "world zero".
     this.worldZeroRoot = new THREE.Group();
     this.worldZeroRoot.name = 'WorldZeroRoot';
-    this.worldZeroRoot.visible = true;
+    this.worldZeroRoot.visible = false;
     this.scene.add(this.worldZeroRoot);
 
     this.houseRoot = new THREE.Group();
@@ -43,11 +42,11 @@ export class ARRenderer {
     // Back-compat: existing code references renderer.anchor
     this.anchor = this.worldZeroRoot;
 
-    // Persisted world-zero / house state (camera-centric “world zero”)
+    // Persisted world-zero / house state
     this.worldZeroState = {
       isSet: false,
-      cameraMatrixAtZero: new THREE.Matrix4(),
-      cameraMatrixAtZeroInverse: new THREE.Matrix4()
+      worldZeroMatrixAtZero: new THREE.Matrix4(),
+      worldZeroMatrixAtZeroInverse: new THREE.Matrix4()
     };
 
     this.model = null;
@@ -60,7 +59,7 @@ export class ARRenderer {
         'ar_world_zero',
         JSON.stringify({
           isSet: this.worldZeroState.isSet,
-          cameraMatrixAtZero: this.worldZeroState.cameraMatrixAtZero.toArray()
+          worldZeroMatrixAtZero: this.worldZeroState.worldZeroMatrixAtZero.toArray()
         })
       );
     } catch {
@@ -74,22 +73,13 @@ export class ARRenderer {
       if (!raw) return false;
 
       const data = JSON.parse(raw);
-      const matrixArr = Array.isArray(data?.cameraMatrixAtZero)
-        ? data.cameraMatrixAtZero
-        : (Array.isArray(data?.worldZeroMatrixAtZero) ? data.worldZeroMatrixAtZero : null);
-      if (!data?.isSet || !matrixArr) return false;
+      if (!data?.isSet || !Array.isArray(data?.worldZeroMatrixAtZero)) return false;
 
       this.worldZeroState.isSet = true;
-      this.worldZeroState.cameraMatrixAtZero.fromArray(matrixArr);
-      this.worldZeroState.cameraMatrixAtZeroInverse
-        .copy(this.worldZeroState.cameraMatrixAtZero)
+      this.worldZeroState.worldZeroMatrixAtZero.fromArray(data.worldZeroMatrixAtZero);
+      this.worldZeroState.worldZeroMatrixAtZeroInverse
+        .copy(this.worldZeroState.worldZeroMatrixAtZero)
         .invert();
-
-      // worldZeroRoot maps world-zero local coords into world coords.
-      this.worldZeroRoot.matrixAutoUpdate = false;
-      this.worldZeroRoot.matrix.copy(this.worldZeroState.cameraMatrixAtZero);
-      this.worldZeroRoot.matrix.decompose(this.worldZeroRoot.position, this.worldZeroRoot.quaternion, this.worldZeroRoot.scale);
-      this.worldZeroRoot.updateMatrixWorld(true);
       return true;
     } catch {
       return false;
@@ -131,19 +121,15 @@ export class ARRenderer {
     return { worldZeroLoaded: wz, housePoseLoaded: hp };
   }
 
-  // Save the current tracking frame as "world zero" (camera pose at the moment you press the button).
+  // Save the current tracking frame as "world zero".
+  // NOTE: In a camera-tracked pipeline this would store camera.matrixWorld.
+  // In this demo, the camera is fixed and worldZeroRoot moves, so we store worldZeroRoot.matrixWorld.
   setWorldZero() {
-    this.camera.updateMatrixWorld(true);
-
-    this.worldZeroState.cameraMatrixAtZero.copy(this.camera.matrixWorld);
-    this.worldZeroState.cameraMatrixAtZeroInverse.copy(this.camera.matrixWorld).invert();
-    this.worldZeroState.isSet = true;
-
-    // worldZeroRoot maps world-zero local coords into world coords.
-    this.worldZeroRoot.matrixAutoUpdate = false;
-    this.worldZeroRoot.matrix.copy(this.worldZeroState.cameraMatrixAtZero);
-    this.worldZeroRoot.matrix.decompose(this.worldZeroRoot.position, this.worldZeroRoot.quaternion, this.worldZeroRoot.scale);
     this.worldZeroRoot.updateMatrixWorld(true);
+
+    this.worldZeroState.worldZeroMatrixAtZero.copy(this.worldZeroRoot.matrixWorld);
+    this.worldZeroState.worldZeroMatrixAtZeroInverse.copy(this.worldZeroRoot.matrixWorld).invert();
+    this.worldZeroState.isSet = true;
 
     this.saveWorldZero();
   }
@@ -153,7 +139,7 @@ export class ARRenderer {
     if (!worldMatrix) return;
 
     const localToWorldZero = new THREE.Matrix4()
-      .copy(this.worldZeroState.cameraMatrixAtZeroInverse)
+      .copy(this.worldZeroState.worldZeroMatrixAtZeroInverse)
       .multiply(worldMatrix);
 
     this.houseRoot.matrixAutoUpdate = false;
@@ -218,15 +204,45 @@ export class ARRenderer {
   }
 
   setAnchorPose(pose) {
-    // Back-compat alias: older code called setAnchorPose with a marker pose.
-    // In Architecture B, that marker pose drives the camera.
-    this.setCameraFromMarkerPose(pose);
+    if (!pose || !pose.position || !pose.rotationMatrix) {
+      this.worldZeroRoot.visible = false;
+      return;
+    }
+
+    // pose.rotationMatrix is row-major 3x3 from OpenCV
+    const r = pose.rotationMatrix;
+
+    // Convert OpenCV camera coords (x right, y down, z forward)
+    // to Three camera coords (x right, y up, z backward): S = diag(1,-1,-1)
+    const r00 = r[0], r01 = r[1], r02 = r[2];
+    const r10 = r[3], r11 = r[4], r12 = r[5];
+    const r20 = r[6], r21 = r[7], r22 = r[8];
+
+    const Rthree = new THREE.Matrix4();
+    Rthree.set(
+      r00, -r01, -r02, 0,
+      -r10, r11, r12, 0,
+      -r20, r21, r22, 0,
+      0, 0, 0, 1
+    );
+
+    const q = new THREE.Quaternion();
+    q.setFromRotationMatrix(Rthree);
+
+    this.worldZeroRoot.position.set(
+      pose.position.x,
+      pose.position.y,
+      -pose.position.z
+    );
+    this.worldZeroRoot.quaternion.copy(q);
+    this.worldZeroRoot.visible = true;
   }
 
   // Preferred AR path: treat the marker as world origin and move the camera.
   // pose is marker->camera (OpenCV solvePnP), so camera->world is its inverse.
   setCameraFromMarkerPose(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) {
+      this.worldZeroRoot.visible = false;
       return;
     }
 
@@ -254,6 +270,11 @@ export class ARRenderer {
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.copy(Twc);
     this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+
+    // Keep world root at origin
+    this.worldZeroRoot.position.set(0, 0, 0);
+    this.worldZeroRoot.quaternion.set(0, 0, 0, 1);
+    this.worldZeroRoot.visible = true;
   }
 
   applySlamDelta(deltaR, deltaT, scale = 1.0) {
@@ -286,6 +307,44 @@ export class ARRenderer {
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.multiply(T12);
     this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+
+    // Keep world root at origin
+    this.worldZeroRoot.position.set(0, 0, 0);
+    this.worldZeroRoot.quaternion.set(0, 0, 0, 1);
+    this.worldZeroRoot.visible = true;
+  }
+
+  // Alternate persistence path: keep the camera fixed and update the anchored content
+  // directly using the per-frame SLAM delta (camera1->camera2): X2 = R*X1 + t.
+  // If anchor represents object->camera transform in the current camera frame, then
+  // T_c2_o = T21 * T_c1_o.
+  applySlamDeltaToAnchor(deltaR, deltaT, scale = 1.0) {
+    if (!deltaR || !deltaT) return;
+    if (!this.worldZeroRoot.visible) return;
+
+    const r00 = deltaR[0], r01 = deltaR[1], r02 = deltaR[2];
+    const r10 = deltaR[3], r11 = deltaR[4], r12 = deltaR[5];
+    const r20 = deltaR[6], r21 = deltaR[7], r22 = deltaR[8];
+
+    const t = new THREE.Vector3(
+      deltaT[0] * scale,
+      -deltaT[1] * scale,
+      -deltaT[2] * scale
+    );
+
+    const T21 = new THREE.Matrix4();
+    T21.set(
+      r00, -r01, -r02, t.x,
+      -r10, r11, r12, t.y,
+      -r20, r21, r22, t.z,
+      0, 0, 0, 1
+    );
+
+    // Ensure worldZeroRoot.matrix matches position/quaternion before applying.
+    this.worldZeroRoot.updateMatrix();
+    this.worldZeroRoot.matrix.premultiply(T21);
+    this.worldZeroRoot.matrix.decompose(this.worldZeroRoot.position, this.worldZeroRoot.quaternion, this.worldZeroRoot.scale);
+    this.worldZeroRoot.updateMatrixWorld(true);
   }
 
   render() {
