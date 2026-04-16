@@ -4,6 +4,9 @@ import { ARRenderer } from './renderer.js';
 import { SlamCore } from './slam_core.js';
 import { initPose, estimatePose, getPoseIntrinsics } from "./pose.js";
 import { MarkerTracker } from './marker_tracker.js';
+import { createToast } from './ui.js';
+
+const ENABLE_OPENCV_DIAGNOSTICS = false;
 
 window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
@@ -48,20 +51,7 @@ window.addEventListener('load', () => {
 
   // Toast helper
   const toastEl = document.getElementById('toast');
-  let toastTimer = null;
-  function showToast(msg, duration = 1500) {
-    if (!toastEl) return;
-    toastEl.textContent = msg;
-    toastEl.hidden = false;
-    toastEl.setAttribute('aria-hidden', 'false');
-    toastEl.classList.add('show');
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      toastEl.classList.remove('show');
-      toastEl.setAttribute('aria-hidden', 'true');
-      toastTimer = setTimeout(() => { toastEl.hidden = true; toastTimer = null; }, 180);
-    }, duration);
-  }
+  const showToast = createToast(toastEl);
 
   if (setWorldZeroBtn) {
     setWorldZeroBtn.addEventListener('click', () => {
@@ -324,81 +314,17 @@ window.addEventListener('load', () => {
 
       console.log('[Init] OpenCV instance acquired');
 
-      // Verify the OpenCV build has the modules we expect (calib3d pose recovery).
-      try {
-        const caps = {
-          recoverPose: typeof cvInstance?.recoverPose === 'function',
-          findEssentialMat: typeof cvInstance?.findEssentialMat === 'function',
-          findFundamentalMat: typeof cvInstance?.findFundamentalMat === 'function'
-        };
-        console.log('[OpenCV] source:', window.__opencvSource || '(unknown)');
-
-        const hasBuildInfo = typeof cvInstance?.getBuildInformation === 'function';
-        console.log('[OpenCV] build information available:', hasBuildInfo);
-        if (hasBuildInfo) {
-          const info = String(cvInstance.getBuildInformation());
-          const lines = info.split('\n');
-          const snippet = lines.slice(0, 14).join('\n');
-          console.log('[OpenCV] build info (snippet):\n' + snippet);
-
-          // Also print the module list (helps distinguish missing module vs missing JS binding).
-          const toBeBuiltIndex = lines.findIndex(l => /^\s*To be built:\s*/.test(l));
-          if (toBeBuiltIndex >= 0) {
-            const block = lines.slice(toBeBuiltIndex, toBeBuiltIndex + 6).join('\n');
-            console.log('[OpenCV] build info (modules):\n' + block);
-          }
-        }
-
-        // Help debug missing bindings: search for similarly-named exports.
+      if (ENABLE_OPENCV_DIAGNOSTICS) {
         try {
-          const names = Object.getOwnPropertyNames(cvInstance);
-          console.log('[OpenCV] export count:', names.length);
-
-          const byKeyword = names.filter(n => /recover|essential|fundamental/i.test(n));
-          console.log('[OpenCV] recover/essential/fundamental exports:', byKeyword);
-
-          const related = names
-            .filter(n => /Pose|Essential|Fundamental|Recover|Calib3d|Epiline|Triang/i.test(n))
-            .slice(0, 80);
-          console.log('[OpenCV] related export names (sample):', related);
+          const { runOpenCVStartupDiagnostics } = await import('./debug.js');
+          runOpenCVStartupDiagnostics(cvInstance, { source: window.__opencvSource || '(unknown)' });
         } catch (e) {
-          console.warn('[OpenCV] export-name scan failed:', e);
+          console.warn('[OpenCV] diagnostics import/run failed:', e);
         }
-
-        console.log('[OpenCV] required APIs:', caps);
-        const ok = caps.recoverPose && (caps.findEssentialMat || caps.findFundamentalMat);
-        if (ok) {
-          console.log('[OpenCV] calib3d pose/epipolar check: PASS');
-        } else {
-          console.error('[OpenCV] calib3d pose/epipolar check: FAIL');
-          try {
-            console.error('[OpenCV] "in" checks:', {
-              recoverPose: 'recoverPose' in cvInstance,
-              findEssentialMat: 'findEssentialMat' in cvInstance,
-              findFundamentalMat: 'findFundamentalMat' in cvInstance
-            });
-          } catch {}
-        }
-      } catch (e) {
-        console.warn('[OpenCV] capability check (post-init) failed:', e);
       }
 
       // Let the UI paint before continuing into heavier initialization.
       await new Promise(r => setTimeout(r, 0));
-
-      // Log capabilities on the next tick to avoid blocking startup.
-      setTimeout(() => {
-        try {
-          console.log('[OpenCV] mode:', window.__opencvSource ? 'local' : 'unknown');
-          console.log('[OpenCV] capabilities:', {
-            findEssentialMat: typeof cvInstance.findEssentialMat,
-            findFundamentalMat: typeof cvInstance.findFundamentalMat,
-            recoverPose: typeof cvInstance.recoverPose
-          });
-        } catch (e) {
-          console.warn('[OpenCV] capability logging failed:', e);
-        }
-      }, 0);
 
       statusEl.textContent = "Initializing pose...";
       // If loadedmetadata happened earlier, initialize pose now; otherwise initialize immediately

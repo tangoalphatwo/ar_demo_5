@@ -12,6 +12,29 @@ export function setStatusLines(lines) {
   else statusEl.textContent = String(lines ?? '');
 }
 
+export function createToast(toastEl) {
+  if (!toastEl) return () => {};
+
+  let toastTimer = null;
+
+  return function showToast(msg, duration = 1500) {
+    toastEl.textContent = String(msg ?? '');
+    toastEl.hidden = false;
+    toastEl.setAttribute('aria-hidden', 'false');
+    toastEl.classList.add('show');
+
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.classList.remove('show');
+      toastEl.setAttribute('aria-hidden', 'true');
+      toastTimer = setTimeout(() => {
+        toastEl.hidden = true;
+        toastTimer = null;
+      }, 180);
+    }, duration);
+  };
+}
+
 function computeContainRect(srcW, srcH, dstW, dstH) {
   const sw = Number(srcW);
   const sh = Number(srcH);

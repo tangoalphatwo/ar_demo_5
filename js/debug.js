@@ -135,3 +135,75 @@ export function createDebugUI({ debugToggleEl, debugInfoEl } = {}) {
     }
   };
 }
+
+export function runOpenCVStartupDiagnostics(cvInstance, { source = '(unknown)' } = {}) {
+  if (!cvInstance) return;
+
+  try {
+    console.log('[OpenCV] source:', source);
+  } catch {}
+
+  try {
+    logOpenCVInfo(cvInstance);
+  } catch (e) {
+    console.warn('[OpenCV] logOpenCVInfo failed:', e);
+  }
+
+  try {
+    const hasBuildInfo = typeof cvInstance?.getBuildInformation === 'function';
+    if (hasBuildInfo) {
+      const info = String(cvInstance.getBuildInformation());
+      const lines = info.split('\n');
+      const snippet = lines.slice(0, 14).join('\n');
+      console.log('[OpenCV] build info (snippet):\n' + snippet);
+
+      const toBeBuiltIndex = lines.findIndex((l) => /^\s*To be built:\s*/.test(l));
+      if (toBeBuiltIndex >= 0) {
+        const block = lines.slice(toBeBuiltIndex, toBeBuiltIndex + 6).join('\n');
+        console.log('[OpenCV] build info (modules):\n' + block);
+      }
+    }
+  } catch (e) {
+    console.warn('[OpenCV] getBuildInformation failed:', e);
+  }
+
+  try {
+    const names = Object.getOwnPropertyNames(cvInstance);
+    const byKeyword = names.filter((n) => /recover|essential|fundamental/i.test(n));
+    const related = names
+      .filter((n) => /Pose|Essential|Fundamental|Recover|Calib3d|Epiline|Triang/i.test(n))
+      .slice(0, 80);
+
+    console.log('[OpenCV] export count:', names.length);
+    console.log('[OpenCV] recover/essential/fundamental exports:', byKeyword);
+    console.log('[OpenCV] related export names (sample):', related);
+  } catch (e) {
+    console.warn('[OpenCV] export-name scan failed:', e);
+  }
+
+  try {
+    const caps = {
+      recoverPose: typeof cvInstance?.recoverPose === 'function',
+      findEssentialMat: typeof cvInstance?.findEssentialMat === 'function',
+      findFundamentalMat: typeof cvInstance?.findFundamentalMat === 'function'
+    };
+
+    console.log('[OpenCV] required APIs:', caps);
+
+    const ok = caps.recoverPose && (caps.findEssentialMat || caps.findFundamentalMat);
+    if (ok) {
+      console.log('[OpenCV] calib3d pose/epipolar check: PASS');
+    } else {
+      console.error('[OpenCV] calib3d pose/epipolar check: FAIL');
+      try {
+        console.error('[OpenCV] "in" checks:', {
+          recoverPose: 'recoverPose' in cvInstance,
+          findEssentialMat: 'findEssentialMat' in cvInstance,
+          findFundamentalMat: 'findFundamentalMat' in cvInstance
+        });
+      } catch {}
+    }
+  } catch (e) {
+    console.warn('[OpenCV] capability check failed:', e);
+  }
+}
