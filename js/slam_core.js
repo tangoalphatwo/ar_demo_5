@@ -140,42 +140,56 @@ export class SlamCore {
         if (E) {
             try {
                 // OpenCV.js recoverPose overloads vary by build.
-                // Some builds only expose the larger overload set (>= 9 args), where the mask comes
-                // before the distance threshold.
+                // Many builds expose overload-specific wrappers: recoverPose1, recoverPose2, ...
+                // Prefer those when available to avoid argument-type ambiguity.
                 const triangulatedPoints = new cv.Mat();
-                const distanceThresh = 3.0; // pixels
+
+                const matInfo = (m) => (m && typeof m.rows === 'number')
+                    ? { rows: m.rows, cols: m.cols, type: (typeof m.type === 'function' ? m.type() : undefined) }
+                    : null;
 
                 try {
-                    try {
-                        // Some OpenCV.js builds want: (E, points1, points2, K, R, t, mask, triangulatedPoints, distanceThresh)
-                        cv.recoverPose(E, prevMat, currMat, K, R, t, mask, triangulatedPoints, distanceThresh);
-                    } catch (eA) {
+                    if (typeof cv.recoverPose1 === 'function') {
+                        // Expected: (E, points1, points2, K, R, t, mask)
+                        cv.recoverPose1(E, prevMat, currMat, K, R, t, mask);
+                    } else if (typeof cv.recoverPose2 === 'function') {
+                        // Expected: (E, points1, points2, K, R, t, mask, triangulatedPoints)
+                        cv.recoverPose2(E, prevMat, currMat, K, R, t, mask, triangulatedPoints);
+                    } else {
+                        // Fallback: attempt the base symbol with a 9-arg variant.
+                        // NOTE: we do not pass a numeric distance threshold here; some builds interpret
+                        // that slot as a Mat and throw "Cannot pass '3' as a Mat".
+                        const tmp = new cv.Mat();
                         try {
-                            // Other builds: (E, points1, points2, K, R, t, distanceThresh, mask, triangulatedPoints)
-                            cv.recoverPose(E, prevMat, currMat, K, R, t, distanceThresh, mask, triangulatedPoints);
-                        } catch (eB) {
-                            try {
-                                // And some: (E, points1, points2, K, R, t, mask, distanceThresh, triangulatedPoints)
-                                cv.recoverPose(E, prevMat, currMat, K, R, t, mask, distanceThresh, triangulatedPoints);
-                            } catch (eC) {
-                                const matInfo = (m) => (m && typeof m.rows === 'number')
-                                    ? { rows: m.rows, cols: m.cols, type: (typeof m.type === 'function' ? m.type() : undefined) }
-                                    : null;
-                                console.warn('recoverPose overload threw:', eC, {
-                                    E: matInfo(E),
-                                    points1: matInfo(prevMat),
-                                    points2: matInfo(currMat),
-                                    K: matInfo(K),
-                                    R: matInfo(R),
-                                    t: matInfo(t),
-                                    mask: matInfo(mask),
-                                    triangulatedPoints: matInfo(triangulatedPoints),
-                                    distanceThresh
-                                });
-                                throw eC;
-                            }
+                            cv.recoverPose(E, prevMat, currMat, K, R, t, mask, triangulatedPoints, tmp);
+                        } catch (e1) {
+                            console.warn('recoverPose wrapper missing; base recoverPose failed:', e1, {
+                                E: matInfo(E),
+                                points1: matInfo(prevMat),
+                                points2: matInfo(currMat),
+                                K: matInfo(K),
+                                R: matInfo(R),
+                                t: matInfo(t),
+                                mask: matInfo(mask),
+                                triangulatedPoints: matInfo(triangulatedPoints)
+                            });
+                            throw e1;
+                        } finally {
+                            tmp.delete();
                         }
                     }
+                } catch (e) {
+                    console.warn('recoverPose overload threw:', e, {
+                        E: matInfo(E),
+                        points1: matInfo(prevMat),
+                        points2: matInfo(currMat),
+                        K: matInfo(K),
+                        R: matInfo(R),
+                        t: matInfo(t),
+                        mask: matInfo(mask),
+                        triangulatedPoints: matInfo(triangulatedPoints)
+                    });
+                    throw e;
                 } finally {
                     triangulatedPoints.delete();
                 }
