@@ -140,20 +140,24 @@ export class SlamCore {
         if (E) {
             try {
                 // OpenCV.js recoverPose overloads vary by build.
-                // Most builds expose: recoverPose(E, points1, points2, K, R, t, mask)
-                // Some also expose:  recoverPose(E, points1, points2, K, R, t, mask, triangulatedPoints)
+                // Some builds only expose the larger overload set (>= 9 args), where the mask comes
+                // before the distance threshold.
                 const triangulatedPoints = new cv.Mat();
+                const distanceThresh = 3.0; // pixels
+
                 try {
                     try {
-                        cv.recoverPose(E, prevMat, currMat, K, R, t, mask, triangulatedPoints);
-                    } catch (e1) {
+                        // Common OpenCV.js overload: (E, points1, points2, K, R, t, mask, distanceThresh, triangulatedPoints)
+                        cv.recoverPose(E, prevMat, currMat, K, R, t, mask, distanceThresh, triangulatedPoints);
+                    } catch (eA) {
                         try {
-                            cv.recoverPose(E, prevMat, currMat, K, R, t, mask);
-                        } catch (e2) {
+                            // Alternate ordering seen in some builds: (E, points1, points2, K, R, t, distanceThresh, mask, triangulatedPoints)
+                            cv.recoverPose(E, prevMat, currMat, K, R, t, distanceThresh, mask, triangulatedPoints);
+                        } catch (eB) {
                             const matInfo = (m) => (m && typeof m.rows === 'number')
                                 ? { rows: m.rows, cols: m.cols, type: (typeof m.type === 'function' ? m.type() : undefined) }
                                 : null;
-                            console.warn('recoverPose overload threw:', e2, {
+                            console.warn('recoverPose overload threw:', eB, {
                                 E: matInfo(E),
                                 points1: matInfo(prevMat),
                                 points2: matInfo(currMat),
@@ -161,9 +165,10 @@ export class SlamCore {
                                 R: matInfo(R),
                                 t: matInfo(t),
                                 mask: matInfo(mask),
-                                triangulatedPoints: matInfo(triangulatedPoints)
+                                triangulatedPoints: matInfo(triangulatedPoints),
+                                distanceThresh
                             });
-                            throw e2;
+                            throw eB;
                         }
                     }
                 } finally {
