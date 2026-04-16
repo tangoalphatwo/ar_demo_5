@@ -20,6 +20,14 @@ export class SlamCore {
 
         // Per-frame delta from recoverPose (camera1->camera2)
         this.lastDelta = null;
+
+        // Performance knobs
+        this.maxTrackFeatures = 200;
+        this.maxPosePoints = 120; // downsample correspondences used for essential/recoverPose
+
+        // Triangulation is debug-only (and not available in some OpenCV.js builds)
+        this.enableTriangulationDebug = false;
+        this._warnedNoTriangulate = false;
     }
 
     _ensureMats(width, height) {
@@ -58,16 +66,16 @@ export class SlamCore {
             this.prevPoints
         );
 
-        const goodPrev = [];
-        const goodCurr = [];
+        const goodPrevAll = [];
+        const goodCurrAll = [];
 
         for (let i = 0; i < status.rows; i++) {
             if (status.data[i] === 1) {
-                goodPrev.push(
+                goodPrevAll.push(
                     this.prevPoints.data32F[2 * i],
                     this.prevPoints.data32F[2 * i + 1]
                 );
-                goodCurr.push(
+                goodCurrAll.push(
                     currPoints.data32F[2 * i],
                     currPoints.data32F[2 * i + 1]
                 );
@@ -78,7 +86,7 @@ export class SlamCore {
         currPoints.delete();
         status.delete();
 
-        if (goodPrev.length < 16) {
+        if (goodPrevAll.length < 16) {
             if (this.prevGray) this.prevGray.delete();
             this.prevGray = this.currGray.clone();
             if (this.prevPoints) this.prevPoints.delete();
@@ -86,12 +94,30 @@ export class SlamCore {
             return { pose: this.pose, mapPoints: this.mapPoints };
         }
 
-        const nGood = goodPrev.length / 2;
+        // Downsample points used for essential/recoverPose to improve performance.
+        // Keep LK tracking state using all surviving points.
+        const nGoodAll = goodPrevAll.length / 2;
+        let goodPrevPose = goodPrevAll;
+        let goodCurrPose = goodCurrAll;
+
+        if (nGoodAll > this.maxPosePoints) {
+            const stride = Math.ceil(nGoodAll / this.maxPosePoints);
+            const prevTmp = [];
+            const currTmp = [];
+            for (let i = 0; i < nGoodAll; i += stride) {
+                prevTmp.push(goodPrevAll[i * 2], goodPrevAll[i * 2 + 1]);
+                currTmp.push(goodCurrAll[i * 2], goodCurrAll[i * 2 + 1]);
+            }
+            goodPrevPose = prevTmp;
+            goodCurrPose = currTmp;
+        }
+
+        const nPose = goodPrevPose.length / 2;
         // For essential matrix / recoverPose, use a conservative, widely-supported format: Nx2 CV_64F
-        const prevMat = cv.matFromArray(nGood, 2, cv.CV_64F, goodPrev);
-        const currMat = cv.matFromArray(nGood, 2, cv.CV_64F, goodCurr);
+        const prevMat = cv.matFromArray(nPose, 2, cv.CV_64F, goodPrevPose);
+        const currMat = cv.matFromArray(nPose, 2, cv.CV_64F, goodCurrPose);
         // For LK state into the next frame, preserve the typical Nx1 CV_32FC2 format
-        const currMatFlow = cv.matFromArray(nGood, 1, cv.CV_32FC2, goodCurr);
+        const currMatFlow = cv.matFromArray(nGoodAll, 1, cv.CV_32FC2, goodCurrAll);
 
         const fx = this.intrinsics?.fx ?? 600;
         const fy = this.intrinsics?.fy ?? 600;
@@ -209,76 +235,84 @@ export class SlamCore {
                 if (this.pose.t) this.pose.t.delete();
                 this.pose.t = newPoseT;
 
-                // Triangulate matched points into 3D (camera1 coordinate system)
+                // Triangulation is debug-only. Some OpenCV.js builds don't expose triangulatePoints,
+                // and throwing/logging every frame tanks performance.
                 this.mapPoints3D = [];
-                try {
-                    if (goodPrev.length >= 16) {
-                        const n = goodPrev.length / 2;
-
-                        // build point arrays: xs then ys (2 x N mats)
-                        const xs1 = [], ys1 = [], xs2 = [], ys2 = [];
-                        for (let i = 0; i < goodPrev.length; i += 2) {
-                            xs1.push(goodPrev[i]); ys1.push(goodPrev[i+1]);
-                            xs2.push(goodCurr[i]); ys2.push(goodCurr[i+1]);
+                if (this.enableTriangulationDebug) {
+                    if (typeof cv.triangulatePoints !== 'function') {
+                        if (!this._warnedNoTriangulate) {
+                            this._warnedNoTriangulate = true;
+                            console.warn('Triangulation disabled: cv.triangulatePoints not available in this OpenCV.js build');
                         }
+                    } else {
+                        try {
+                            if (goodPrevPose.length >= 16) {
+                                const n = goodPrevPose.length / 2;
 
-                        const pts1 = cv.matFromArray(2, n, cv.CV_64F, xs1.concat(ys1));
-                        const pts2 = cv.matFromArray(2, n, cv.CV_64F, xs2.concat(ys2));
+                                // build point arrays: xs then ys (2 x N mats)
+                                const xs1 = [], ys1 = [], xs2 = [], ys2 = [];
+                                for (let i = 0; i < goodPrevPose.length; i += 2) {
+                                    xs1.push(goodPrevPose[i]); ys1.push(goodPrevPose[i + 1]);
+                                    xs2.push(goodCurrPose[i]); ys2.push(goodCurrPose[i + 1]);
+                                }
 
-                        // Camera intrinsics (prefer pose.js intrinsics; fall back to heuristic)
-                        const fx = this.intrinsics?.fx ?? 600;
-                        const fy = this.intrinsics?.fy ?? 600;
-                        const cx = this.intrinsics?.cx ?? (width / 2);
-                        const cy = this.intrinsics?.cy ?? (height / 2);
-                        const Kmat = cv.matFromArray(3, 3, cv.CV_64F, [
-                            fx, 0, cx,
-                            0, fy, cy,
-                            0, 0, 1
-                        ]);
+                                const pts1 = cv.matFromArray(2, n, cv.CV_64F, xs1.concat(ys1));
+                                const pts2 = cv.matFromArray(2, n, cv.CV_64F, xs2.concat(ys2));
 
-                        // P1 = K * [I|0]
-                        const P1 = new cv.Mat(3, 4, cv.CV_64F);
-                        for (let r = 0; r < 3; r++) {
-                            for (let c = 0; c < 3; c++) {
-                                P1.doublePtr(r, c)[0] = Kmat.doublePtr(r, c)[0];
+                                const fx = this.intrinsics?.fx ?? 600;
+                                const fy = this.intrinsics?.fy ?? 600;
+                                const cx = this.intrinsics?.cx ?? (width / 2);
+                                const cy = this.intrinsics?.cy ?? (height / 2);
+                                const Kmat = cv.matFromArray(3, 3, cv.CV_64F, [
+                                    fx, 0, cx,
+                                    0, fy, cy,
+                                    0, 0, 1
+                                ]);
+
+                                // P1 = K * [I|0]
+                                const P1 = new cv.Mat(3, 4, cv.CV_64F);
+                                for (let r = 0; r < 3; r++) {
+                                    for (let c = 0; c < 3; c++) {
+                                        P1.doublePtr(r, c)[0] = Kmat.doublePtr(r, c)[0];
+                                    }
+                                    P1.doublePtr(r, 3)[0] = 0;
+                                }
+
+                                // Rt = [R|t]
+                                const Rt = new cv.Mat(3, 4, cv.CV_64F);
+                                for (let r = 0; r < 3; r++) {
+                                    for (let c = 0; c < 3; c++) {
+                                        Rt.doublePtr(r, c)[0] = R.doublePtr(r, c)[0];
+                                    }
+                                    Rt.doublePtr(r, 3)[0] = t.doublePtr(r, 0)[0];
+                                }
+
+                                const P2 = new cv.Mat();
+                                const empty3 = new cv.Mat();
+                                cv.gemm(Kmat, Rt, 1, empty3, 0, P2);
+                                empty3.delete();
+
+                                const points4D = new cv.Mat();
+                                cv.triangulatePoints(P1, P2, pts1, pts2, points4D);
+
+                                for (let i = 0; i < n; i++) {
+                                    const w = points4D.doublePtr(3, i)[0];
+                                    if (Math.abs(w) < 1e-8) continue;
+                                    const X = points4D.doublePtr(0, i)[0] / w;
+                                    const Y = points4D.doublePtr(1, i)[0] / w;
+                                    const Z = points4D.doublePtr(2, i)[0] / w;
+                                    if (!isFinite(X) || !isFinite(Y) || !isFinite(Z)) continue;
+                                    if (Math.abs(X) > 100 || Math.abs(Y) > 100 || Math.abs(Z) > 100) continue;
+                                    this.mapPoints3D.push({ X, Y, Z });
+                                }
+
+                                points4D.delete();
+                                P1.delete(); Rt.delete(); P2.delete(); pts1.delete(); pts2.delete(); Kmat.delete();
                             }
-                            P1.doublePtr(r, 3)[0] = 0;
+                        } catch {
+                            // ignore debug triangulation failures
                         }
-
-                        // Rt = [R|t]
-                        const Rt = new cv.Mat(3, 4, cv.CV_64F);
-                        for (let r = 0; r < 3; r++) {
-                            for (let c = 0; c < 3; c++) {
-                                Rt.doublePtr(r, c)[0] = R.doublePtr(r, c)[0];
-                            }
-                            Rt.doublePtr(r, 3)[0] = t.doublePtr(r, 0)[0];
-                        }
-
-                        const P2 = new cv.Mat();
-                        const empty3 = new cv.Mat();
-                        cv.gemm(Kmat, Rt, 1, empty3, 0, P2);
-                        empty3.delete();
-
-                        const points4D = new cv.Mat();
-                        cv.triangulatePoints(P1, P2, pts1, pts2, points4D);
-
-                        for (let i = 0; i < n; i++) {
-                            const w = points4D.doublePtr(3, i)[0];
-                            if (Math.abs(w) < 1e-8) continue;
-                            const X = points4D.doublePtr(0, i)[0] / w;
-                            const Y = points4D.doublePtr(1, i)[0] / w;
-                            const Z = points4D.doublePtr(2, i)[0] / w;
-                            // basic filtering of outliers
-                            if (!isFinite(X) || !isFinite(Y) || !isFinite(Z)) continue;
-                            if (Math.abs(X) > 100 || Math.abs(Y) > 100 || Math.abs(Z) > 100) continue;
-                            this.mapPoints3D.push({ X, Y, Z });
-                        }
-
-                        points4D.delete();
-                        P1.delete(); Rt.delete(); P2.delete(); pts1.delete(); pts2.delete(); Kmat.delete();
                     }
-                } catch (err) {
-                    console.warn('Triangulation failed:', err);
                 }
 
                 if (this.prevGray) this.prevGray.delete();
@@ -342,7 +376,7 @@ export class SlamCore {
       const cv = this.cv;
       const corners = new cv.Mat();
     
-      cv.goodFeaturesToTrack(gray, corners, 300, 0.01, 10);
+      cv.goodFeaturesToTrack(gray, corners, this.maxTrackFeatures, 0.01, 10);
     
       // DEBUG: expose 2D points for rendering
       this.mapPoints = [];
