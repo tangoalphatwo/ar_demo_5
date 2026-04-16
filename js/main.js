@@ -662,12 +662,19 @@ window.addEventListener('load', () => {
       // IMPORTANT: do not clamp marker corners to the frame border.
       // Clamping makes corners "stick" to the edge, which pushes the pose (and the model)
       // toward the edge and can leave it stuck there.
-      const margin = 0.02;
-      if (u < -margin || u > 1 + margin || v < -margin || v > 1 + margin) return null;
+      const oobMargin = 0.02;
+      if (u < -oobMargin || u > 1 + oobMargin || v < -oobMargin || v > 1 + oobMargin) return null;
+
+      // Even when points are technically in-bounds, LK/Homography gets unstable near the crop boundary.
+      // When SLAM is available, we prefer to stop applying marker pose updates near the edge so the
+      // house stays fixed in the world and can naturally leave the camera frustum.
+      const edgeGuard = 0.05;
+      const nearEdge = (u < edgeGuard || u > 1 - edgeGuard || v < edgeGuard || v > 1 - edgeGuard);
 
       return {
         x: u * videoEl.videoWidth,
-        y: v * videoEl.videoHeight
+        y: v * videoEl.videoHeight,
+        nearEdge
       };
     }
 
@@ -763,8 +770,9 @@ window.addEventListener('load', () => {
 
         if (cornersProc) {
           // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
-          const imagePtsScaled = cornersProc.map(procPointToVideo);
-          const markerPtsOk = imagePtsScaled.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+          const imagePtsScaledFull = cornersProc.map(procPointToVideo);
+          const markerPtsOk = imagePtsScaledFull.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+          const markerNearEdge = markerPtsOk && imagePtsScaledFull.some(p => p.nearEdge);
 
           if (!markerPtsOk) {
             // Corners left the visible video region. Do NOT clamp them to the border (that causes
@@ -777,7 +785,13 @@ window.addEventListener('load', () => {
             markerPrevPts = null;
 
             cornersProc = null;
+          } else if (markerNearEdge && slam) {
+            // Marker is still technically visible, but near the crop boundary.
+            // Stop applying PnP updates so the content doesn't get pulled toward the screen edge.
+            cornersProc = null;
           } else {
+            const imagePtsScaled = imagePtsScaledFull.map(({ x, y }) => ({ x, y }));
+
             const justAcquired = !lastHadMarker;
             if (justAcquired) loggedReacquireRejection = false;
 
