@@ -100,6 +100,10 @@ window.addEventListener('load', () => {
   let markerPrevPts = null; // cv.Mat 4x1 CV_32FC2
   let lastStableMarkerPose = null;
 
+  // ORB marker (re)detect is expensive; throttle it when the marker is lost.
+  const MARKER_DETECT_EVERY_N_FRAMES = 3;
+  let markerDetectCountdown = 0;
+
   // SLAM scale estimation using marker PnP while marker is visible
   let slamMetricScale = 0.0;
   let lastMarkerPoseForScale = null;
@@ -726,23 +730,34 @@ window.addEventListener('load', () => {
 
         // If not currently tracking, (re)detect the marker using ORB+homography.
         if (!cornersProc) {
-          const det = markerTracker.detect(gray);
-          if (det && det.corners && det.corners.length === 4) {
-            cornersProc = det.corners;
+          if (markerDetectCountdown > 0) {
+            markerDetectCountdown--;
+          } else {
+            const det = markerTracker.detect(gray);
+            if (det && det.corners && det.corners.length === 4) {
+              cornersProc = det.corners;
 
-            // Seed tracking state
-            markerPrevGray?.delete?.();
-            markerPrevGray = gray.clone();
-            markerPrevPts?.delete?.();
-            markerPrevPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-              cornersProc[0].x, cornersProc[0].y,
-              cornersProc[1].x, cornersProc[1].y,
-              cornersProc[2].x, cornersProc[2].y,
-              cornersProc[3].x, cornersProc[3].y
-            ]);
-            markerTracking = true;
+              // Seed tracking state
+              markerPrevGray?.delete?.();
+              markerPrevGray = gray.clone();
+              markerPrevPts?.delete?.();
+              markerPrevPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                cornersProc[0].x, cornersProc[0].y,
+                cornersProc[1].x, cornersProc[1].y,
+                cornersProc[2].x, cornersProc[2].y,
+                cornersProc[3].x, cornersProc[3].y
+              ]);
+              markerTracking = true;
 
-            det.homography?.delete?.();
+              // Reset throttle on success
+              markerDetectCountdown = 0;
+
+              det.homography?.delete?.();
+            } else {
+              // Back off a bit when detection fails (common during fast motion / blur)
+              markerDetectCountdown = MARKER_DETECT_EVERY_N_FRAMES - 1;
+              det?.homography?.delete?.();
+            }
           }
         }
 
@@ -856,6 +871,8 @@ window.addEventListener('load', () => {
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
             // keep lastStableMarkerPose around for debugging, but don't render it.
+            rgba.delete();
+            gray.delete();
             return requestAnimationFrame(loop);
           }
 
@@ -971,27 +988,28 @@ window.addEventListener('load', () => {
       // Keep the previous feature-based heuristic only as a fallback if the marker tracker is not active.
       if (!markerTracker) {
         const rawImagePts = getDetectedPoints(); // in processing canvas coords
-        if (!rawImagePts || !cvInstance) return;
-        // scale to the video coordinate space used by initPose (video.videoWidth/height)
-        const sx = videoEl.videoWidth / camera.cvCanvas.width;
-        const sy = videoEl.videoHeight / camera.cvCanvas.height;
-        const imagePtsScaled = rawImagePts.map(p => ({ x: p.x * sx, y: p.y * sy }));
+        if (rawImagePts && cvInstance) {
+          // scale to the video coordinate space used by initPose (video.videoWidth/height)
+          const sx = videoEl.videoWidth / camera.cvCanvas.width;
+          const sy = videoEl.videoHeight / camera.cvCanvas.height;
+          const imagePtsScaled = rawImagePts.map(p => ({ x: p.x * sx, y: p.y * sy }));
 
-        const objectPoints = [
-          { x: -0.05, y: -0.05, z: 0 },
-          { x:  0.05, y: -0.05, z: 0 },
-          { x:  0.05, y:  0.05, z: 0 },
-          { x: -0.05, y:  0.05, z: 0 }
-        ];
+          const objectPoints = [
+            { x: -0.05, y: -0.05, z: 0 },
+            { x:  0.05, y: -0.05, z: 0 },
+            { x:  0.05, y:  0.05, z: 0 },
+            { x: -0.05, y:  0.05, z: 0 }
+          ];
 
-        const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
-        if (pose) {
-          // pose is now a smoothed poseState { position: {x,y,z}, rotation: {yaw,pitch,roll} }
-          latestPose = pose;
-          console.log('Position:', pose.position);
-          console.log('Yaw:', pose.rotation.yaw);
-        } else {
-          latestPose = null;
+          const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
+          if (pose) {
+            // pose is now a smoothed poseState { position: {x,y,z}, rotation: {yaw,pitch,roll} }
+            latestPose = pose;
+            console.log('Position:', pose.position);
+            console.log('Yaw:', pose.rotation.yaw);
+          } else {
+            latestPose = null;
+          }
         }
       }
     } catch (e) {
