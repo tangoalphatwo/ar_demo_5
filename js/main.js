@@ -83,7 +83,6 @@ window.addEventListener('load', () => {
   let slam = null;
 
   let markerTracker = null;
-  let avocadoLoaded = false;
 
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
@@ -108,30 +107,6 @@ window.addEventListener('load', () => {
   let slamMetricScale = 0.0;
   let lastMarkerPoseForScale = null;
 
-  function mat3MulVec3(r, v) {
-    return {
-      x: r[0] * v.x + r[1] * v.y + r[2] * v.z,
-      y: r[3] * v.x + r[4] * v.y + r[5] * v.z,
-      z: r[6] * v.x + r[7] * v.y + r[8] * v.z
-    };
-  }
-
-  function mat3MulMat3(a, b) {
-    return [
-      a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
-      a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
-      a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
-
-      a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
-      a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
-      a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
-
-      a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
-      a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
-      a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
-    ];
-  }
-
   function poseJumpTooLarge(prev, next) {
     if (!prev || !next) return false;
     const dx = next.position.x - prev.position.x;
@@ -140,18 +115,6 @@ window.addEventListener('load', () => {
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     // reject very large sudden jumps (usually due to a bad homography / corner mixup)
     return dist > 0.25;
-  }
-
-  function orderQuadTLTRBRBL(pts) {
-    if (!pts || pts.length !== 4) return pts;
-    // Standard TL/TR/BR/BL ordering based on sums/diffs
-    const sums = pts.map(p => p.x + p.y);
-    const diffs = pts.map(p => p.x - p.y);
-    const tl = pts[sums.indexOf(Math.min(...sums))];
-    const br = pts[sums.indexOf(Math.max(...sums))];
-    const tr = pts[diffs.indexOf(Math.max(...diffs))];
-    const bl = pts[diffs.indexOf(Math.min(...diffs))];
-    return [tl, tr, br, bl];
   }
 
   function orderQuadIndicesTLTRBRBL(pts) {
@@ -175,7 +138,6 @@ window.addEventListener('load', () => {
     return true;
   }
 
-  let cvReady = false;
   let cvInstance = null;
 
   let prevGray = null;
@@ -499,7 +461,6 @@ window.addEventListener('load', () => {
       if (scaledSize) console.log('Model scaled bbox (scene units):', scaledSize);
 
         renderer.houseRoot.add(renderer.model);
-        avocadoLoaded = true;
         console.log('[Init] Model loaded + attached');
         showToast('House loaded');
       } catch (e) {
@@ -542,63 +503,6 @@ window.addEventListener('load', () => {
       }
     }
   });
-
-  function drawFeatures(points) {
-    if (!points || points.length === 0) return;
-
-    const ctx = cvCanvas.getContext("2d");
-
-    ctx.save();
-    ctx.fillStyle = "lime";
-
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i];
-
-      // For now we fake projection: screen-space debug
-      const x = (p.x !== undefined) ? p.x : null;
-      const y = (p.y !== undefined) ? p.y : null;
-
-      if (x === null || y === null) continue;
-
-      ctx.beginPath();
-      ctx.arc(x, y, 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  function drawVideoPreserveAspect(ctx, video, canvas) {
-    const videoAspect = video.videoWidth / video.videoHeight;
-    // Use CSS pixels for layout calculations (clientWidth/clientHeight)
-    const canvasCssW = canvas.clientWidth;
-    const canvasCssH = canvas.clientHeight;
-    const canvasAspect = canvasCssW / canvasCssH;
-
-    let drawWidth, drawHeight, offsetX, offsetY;
-
-    // COVER: fill the canvas completely (crop excess).
-    if (canvasAspect > videoAspect) {
-      // Canvas is wider than video → scale by width and crop vertically
-      drawWidth = canvasCssW;
-      drawHeight = drawWidth / videoAspect;
-      offsetX = 0;
-      offsetY = (canvasCssH - drawHeight) / 2;
-    } else {
-      // Canvas is taller than video → scale by height and crop horizontally
-      drawHeight = canvasCssH;
-      drawWidth = drawHeight * videoAspect;
-      offsetX = (canvasCssW - drawWidth) / 2;
-      offsetY = 0;
-    }
-
-    // Clear the full backing buffer
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // drawImage coordinates are in CSS pixels because the context transform maps them
-    ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
-
-    return { offsetX, offsetY, drawWidth, drawHeight };
-  }
 
   // Return four image points (in processing coords) to try as correspondences.
   // This is a heuristic placeholder: picks 4 points nearest to extreme corners
@@ -1055,7 +959,7 @@ window.addEventListener('load', () => {
 
     // DRAW
     const ctx = cvCanvas.getContext("2d");
-    const drawRect = drawVideoPreserveAspect(ctx, videoEl, cvCanvas);
+    const drawRect = drawRectForFrame;
 
     if (showDebug) {
       // draw bounding rect for the video content (letterbox/pillarbox area)

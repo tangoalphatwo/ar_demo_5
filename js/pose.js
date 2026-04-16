@@ -2,8 +2,6 @@
 let cameraMatrix = null;
 let distCoeffs = null;
 let cvModule = null;
-let worldOrigin = null;
-let rawPose = null;
 let lastPose = null;
 
 // Keep last rvec/tvec for solvePnP initial guess (significantly stabilizes pose)
@@ -117,34 +115,6 @@ function toCvPoint3f(points) {
   return cvModule.matFromArray(points.length, 1, cvModule.CV_32FC3, data);
 }
 
-export function setWorldOrigin() {
-  if (!rawPose) return;
-
-  worldOrigin = {
-    position: { ...rawPose.position },
-    rotation: { ...rawPose.rotation }
-  };
-
-  console.log("World origin set:", worldOrigin);
-}
-
-function applyWorldZero(pose) {
-  if (!worldOrigin) return pose;
-
-  return {
-    position: {
-      x: pose.position.x - worldOrigin.position.x,
-      y: pose.position.y - worldOrigin.position.y,
-      z: pose.position.z - worldOrigin.position.z
-    },
-    rotation: {
-      yaw:   pose.rotation.yaw   - worldOrigin.rotation.yaw,
-      pitch: pose.rotation.pitch - worldOrigin.rotation.pitch,
-      roll:  pose.rotation.roll  - worldOrigin.rotation.roll
-    }
-  };
-}
-
 export function estimatePose(imagePoints, objectPoints, cv) {
   const cvLocal = cv || cvModule;
   if (!cvLocal || !cameraMatrix || !distCoeffs) {
@@ -219,12 +189,6 @@ export function estimatePose(imagePoints, objectPoints, cv) {
     lastTvecArr = null;
   }
 
-  rawPose = {
-    position: { ...t },
-    rotation: { ...r },
-    rotationMatrix: rotArr.slice() // keep numeric rotation matrix around
-    };
-
   // Build pose state and smooth against lastPose
   let poseState = {
     position: { ...t },
@@ -248,12 +212,5 @@ export function estimatePose(imagePoints, objectPoints, cv) {
   }
 
   lastPose = poseState;
-  const worldPose = applyWorldZero(poseState);
-  // lastPose = worldPose;
-  // Preserve numeric rotation matrix in worldPose if available
-  if (poseState.rotationMatrix) {
-    worldPose.rotationMatrix = poseState.rotationMatrix.slice();
-  }
-
-  return worldPose;
+  return poseState;
 }
