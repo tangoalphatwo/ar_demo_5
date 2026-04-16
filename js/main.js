@@ -154,6 +154,17 @@ window.addEventListener('load', () => {
     return [tl, tr, br, bl];
   }
 
+  function orderQuadIndicesTLTRBRBL(pts) {
+    if (!pts || pts.length !== 4) return null;
+    const sums = pts.map(p => p.x + p.y);
+    const diffs = pts.map(p => p.x - p.y);
+    const tl = sums.indexOf(Math.min(...sums));
+    const br = sums.indexOf(Math.max(...sums));
+    const tr = diffs.indexOf(Math.max(...diffs));
+    const bl = diffs.indexOf(Math.min(...diffs));
+    return [tl, tr, br, bl];
+  }
+
   function poseLooksPlausible(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) return false;
     const { x, y, z } = pose.position;
@@ -668,7 +679,7 @@ window.addEventListener('load', () => {
       // Even when points are technically in-bounds, LK/Homography gets unstable near the crop boundary.
       // When SLAM is available, we prefer to stop applying marker pose updates near the edge so the
       // house stays fixed in the world and can naturally leave the camera frustum.
-      const edgeGuard = 0.05;
+      const edgeGuard = 0.12;
       const nearEdge = (u < edgeGuard || u > 1 - edgeGuard || v < edgeGuard || v > 1 - edgeGuard);
 
       return {
@@ -770,8 +781,17 @@ window.addEventListener('load', () => {
 
         if (cornersProc) {
           // Map from processing canvas coords (letterboxed) to raw video coords (initPose uses video dims)
-          const imagePtsScaledFull = cornersProc.map(procPointToVideo);
-          const markerPtsOk = imagePtsScaledFull.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+          const imagePtsScaledFullRaw = cornersProc.map(procPointToVideo);
+          const markerPtsOk = imagePtsScaledFullRaw.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+
+          // Enforce a stable TL/TR/BR/BL ordering to avoid corner-crossing causing PnP to drag the pose.
+          // This especially matters near edges and during fast motion when LK can swap points.
+          let imagePtsScaledFull = imagePtsScaledFullRaw;
+          if (markerPtsOk) {
+            const idx = orderQuadIndicesTLTRBRBL(imagePtsScaledFullRaw);
+            if (idx) imagePtsScaledFull = idx.map(i => imagePtsScaledFullRaw[i]);
+          }
+
           const markerNearEdge = markerPtsOk && imagePtsScaledFull.some(p => p.nearEdge);
 
           if (!markerPtsOk) {
