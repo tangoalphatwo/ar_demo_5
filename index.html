@@ -13,6 +13,8 @@
     window.__opencvSource = 'opencv/opencv.js';
     // Bump this string whenever you upload a new OpenCV build to avoid stale browser caches.
     window.__opencvAssetTag = 'v1';
+    // Set true only when debugging OpenCV load/build issues.
+    window.__opencvDiagnostics = false;
   
     var Module = {
       locateFile: function (path) {
@@ -21,14 +23,19 @@
         const tag = window.__opencvAssetTag ? `?${encodeURIComponent(window.__opencvAssetTag)}` : '';
         const url = `opencv/${path}${tag}`;
         // Helpful for verifying which wasm/data filenames the build is requesting.
-        try { console.log('[OpenCV] locateFile:', path, '->', url); } catch {}
+        if (window.__opencvDiagnostics) {
+          try { console.log('[OpenCV] locateFile:', path, '->', url); } catch {}
+        }
         return url;
       },
       onRuntimeInitialized: function () {
-        console.log("OpenCV runtime initialized (Module)");
+        if (window.__opencvDiagnostics) {
+          console.log("OpenCV runtime initialized (Module)");
+          console.log('[OpenCV] asset tag:', window.__opencvAssetTag);
+        }
         window.__opencvReady = true;
 
-        console.log('[OpenCV] asset tag:', window.__opencvAssetTag);
+        if (!window.__opencvDiagnostics) return;
 
         // Optional sanity check: confirm the wasm artifact is reachable from the server.
         // This doesn't guarantee the runtime used it, but it quickly catches "404 wasm" issues.
@@ -103,7 +110,7 @@
       document.head.appendChild(s);
     })();
   </script>
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/main_fixed.js"></script>
 
 </head>
 <body>

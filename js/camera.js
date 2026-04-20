@@ -3,7 +3,7 @@ export class CameraManager {
   constructor(videoEl, cvCanvas) {
     this.video = videoEl;
     this.cvCanvas = cvCanvas;
-    this.cvCtx = cvCanvas.getContext('2d');
+    this.cvCtx = cvCanvas.getContext('2d', { willReadFrequently: true });
     this.ready = false;
 
     this.lastDrawRect = null;
