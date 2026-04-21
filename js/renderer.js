@@ -50,6 +50,17 @@ export class ARRenderer {
     };
 
     this.model = null;
+
+    // Camera pose smoothing (helps reduce solvePnP jitter in camera-tracked mode)
+    this.cameraPoseSmoothing = 0.85; // 0 = no smoothing, closer to 1 = smoother/more lag
+    this._cameraPoseFiltered = {
+      initialized: false,
+      position: new THREE.Vector3(),
+      quaternion: new THREE.Quaternion()
+    };
+    this._tmpDesiredPos = new THREE.Vector3();
+    this._tmpDesiredQuat = new THREE.Quaternion();
+    this._tmpDesiredScale = new THREE.Vector3();
   }
 
   // --- Persistence helpers ---
@@ -273,7 +284,25 @@ export class ARRenderer {
 
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.copy(Twc);
-    this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+
+    // Decompose into desired TRS then smooth camera pose.
+    this.camera.matrix.decompose(this._tmpDesiredPos, this._tmpDesiredQuat, this._tmpDesiredScale);
+    const keep = Math.min(0.999, Math.max(0.0, this.cameraPoseSmoothing));
+    const apply = 1.0 - keep;
+
+    if (!this._cameraPoseFiltered.initialized) {
+      this._cameraPoseFiltered.initialized = true;
+      this._cameraPoseFiltered.position.copy(this._tmpDesiredPos);
+      this._cameraPoseFiltered.quaternion.copy(this._tmpDesiredQuat);
+    } else {
+      this._cameraPoseFiltered.position.lerp(this._tmpDesiredPos, apply);
+      this._cameraPoseFiltered.quaternion.slerp(this._tmpDesiredQuat, apply);
+    }
+
+    this.camera.position.copy(this._cameraPoseFiltered.position);
+    this.camera.quaternion.copy(this._cameraPoseFiltered.quaternion);
+    this.camera.scale.set(1, 1, 1);
+    this.camera.updateMatrix();
     this.camera.matrixWorldNeedsUpdate = true;
     this.camera.updateMatrixWorld(true);
 
