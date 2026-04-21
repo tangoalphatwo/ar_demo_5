@@ -8,6 +8,9 @@ const ENABLE_OPENCV_DIAGNOSTICS = window.__opencvDiagnostics === true;
 // Step-wise refactor flag: when true, use camera-tracked runtime path.
 // (Marker seeds camera pose; SLAM applies deltas to the camera.)
 const USE_CAMERA_TRACKED_RUNTIME = true;
+// When camera-tracked, use the marker only to seed the camera pose once.
+// This prevents per-frame marker pose updates from fighting SLAM and causing jitter.
+const MARKER_SEEDS_CAMERA_ONCE = true;
 
 window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
@@ -72,6 +75,9 @@ window.addEventListener('load', () => {
   let running = false;
   let slam = null;
   let markerTracker = null;
+
+  // Marker acquisition vs tracking state (camera-tracked pipeline)
+  let trackingState = 'acquiring'; // 'acquiring' | 'tracking'
 
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
@@ -535,6 +541,11 @@ window.addEventListener('load', () => {
 
     try {
       if (markerTracker) {
+        // In camera-tracked mode, once we've seeded the camera, stop using the marker as a per-frame pose driver.
+        // (We still keep SLAM running below.)
+        if (USE_CAMERA_TRACKED_RUNTIME && MARKER_SEEDS_CAMERA_ONCE && trackingState === 'tracking') {
+          // noop: skip marker processing entirely for speed + stability
+        } else {
         let cornersProc = null;
 
         if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
@@ -659,7 +670,10 @@ window.addEventListener('load', () => {
               lastStableMarkerPose = pose;
               latestPose = pose;
               if (USE_CAMERA_TRACKED_RUNTIME) {
-                renderer.setCameraFromMarkerPose(pose);
+                if (!MARKER_SEEDS_CAMERA_ONCE || trackingState === 'acquiring') {
+                  renderer.setCameraFromMarkerPose(pose);
+                  if (MARKER_SEEDS_CAMERA_ONCE) trackingState = 'tracking';
+                }
               } else {
                 renderer.setAnchorPose(pose);
               }
@@ -684,13 +698,18 @@ window.addEventListener('load', () => {
             } else if (lastStableMarkerPose) {
               if (justAcquired || !slam) {
                 if (USE_CAMERA_TRACKED_RUNTIME) {
-                  renderer.setCameraFromMarkerPose(null);
+                  // If we've already seeded the camera, keep the last pose even if marker is temporarily invalid.
+                  if (!MARKER_SEEDS_CAMERA_ONCE || trackingState === 'acquiring') {
+                    renderer.setCameraFromMarkerPose(null);
+                  }
                 } else {
                   renderer.setAnchorPose(null);
                 }
               } else {
                 if (USE_CAMERA_TRACKED_RUNTIME) {
-                  renderer.setCameraFromMarkerPose(lastStableMarkerPose);
+                  if (!MARKER_SEEDS_CAMERA_ONCE || trackingState === 'acquiring') {
+                    renderer.setCameraFromMarkerPose(lastStableMarkerPose);
+                  }
                 } else {
                   renderer.setAnchorPose(lastStableMarkerPose);
                 }
@@ -715,7 +734,9 @@ window.addEventListener('load', () => {
               }
             } else {
               if (USE_CAMERA_TRACKED_RUNTIME) {
-                renderer.setCameraFromMarkerPose(null);
+                if (!MARKER_SEEDS_CAMERA_ONCE || trackingState === 'acquiring') {
+                  renderer.setCameraFromMarkerPose(null);
+                }
               } else {
                 renderer.setAnchorPose(null);
               }
@@ -732,7 +753,10 @@ window.addEventListener('load', () => {
 
           if (!slam) {
             if (USE_CAMERA_TRACKED_RUNTIME) {
-              renderer.setCameraFromMarkerPose(null);
+              // If we seeded already, keep rendering from last camera pose.
+              if (!MARKER_SEEDS_CAMERA_ONCE || trackingState === 'acquiring') {
+                renderer.setCameraFromMarkerPose(null);
+              }
             } else {
               renderer.setAnchorPose(null);
             }
@@ -752,6 +776,7 @@ window.addEventListener('load', () => {
 
           if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
+        }
         }
       }
     } catch (e) {
