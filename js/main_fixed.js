@@ -768,77 +768,106 @@ window.addEventListener('load', () => {
       debugInfo.textContent = `${debugInfo.textContent}\npose(m): x=${p.x.toFixed(3)} y=${p.y.toFixed(3)} z=${p.z.toFixed(3)}`;
     }
 
-    if (!prevGray || !prevPoints || prevPoints.rows === 0) {
-      prevGray = gray.clone();
-      prevPoints = new cv.Mat();
-      cv.goodFeaturesToTrack(prevGray, prevPoints, MAX_FEATURES, FEATURE_QUALITY, FEATURE_MIN_DIST);
-
-      debugFeaturePoints = [];
-      for (let i = 0; i < prevPoints.rows; i++) {
-        debugFeaturePoints.push({
-          x: prevPoints.data32F[i * 2],
-          y: prevPoints.data32F[i * 2 + 1]
-        });
-      }
-    } else {
-      const currPoints = new cv.Mat();
-      const status = new cv.Mat();
-      const err = new cv.Mat();
-
-      cv.calcOpticalFlowPyrLK(prevGray, gray, prevPoints, currPoints, status, err);
-
-      const goodCurrFloats = [];
-      for (let i = 0; i < status.rows; i++) {
-        if (status.data[i] === 1) {
-          goodCurrFloats.push(currPoints.data32F[i * 2], currPoints.data32F[i * 2 + 1]);
+    // Debug-only feature overlay (separate from SLAM's internal tracking).
+    // This must never be allowed to crash the main loop.
+    if (showDebug) {
+      try {
+        // If the frame size changes, LK will throw; reset state.
+        if (prevGray && (prevGray.rows !== gray.rows || prevGray.cols !== gray.cols)) {
+          prevGray.delete();
+          prevGray = null;
         }
-      }
 
-      let mergedFloats = goodCurrFloats;
-      const goodCount = goodCurrFloats.length / 2;
+        if (!prevGray || !prevPoints || prevPoints.rows === 0) {
+          prevGray?.delete?.();
+          prevPoints?.delete?.();
 
-      if (goodCount < MIN_FEATURES) {
-        const want = Math.max(0, MAX_FEATURES - goodCount);
-        if (want > 0) {
-          const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
-          for (let i = 0; i < goodCount; i++) {
-            const x = goodCurrFloats[i * 2];
-            const y = goodCurrFloats[i * 2 + 1];
-            cv.circle(mask, new cv.Point(x, y), FEATURE_EXCLUSION_RADIUS, new cv.Scalar(0), -1);
+          prevGray = gray.clone();
+          prevPoints = new cv.Mat();
+          cv.goodFeaturesToTrack(prevGray, prevPoints, MAX_FEATURES, FEATURE_QUALITY, FEATURE_MIN_DIST);
+
+          debugFeaturePoints = [];
+          for (let i = 0; i < prevPoints.rows; i++) {
+            debugFeaturePoints.push({
+              x: prevPoints.data32F[i * 2],
+              y: prevPoints.data32F[i * 2 + 1]
+            });
           }
+        } else {
+          const currPoints = new cv.Mat();
+          const status = new cv.Mat();
+          const err = new cv.Mat();
 
-          const extra = new cv.Mat();
-          cv.goodFeaturesToTrack(gray, extra, want, FEATURE_QUALITY, FEATURE_MIN_DIST, mask);
+          cv.calcOpticalFlowPyrLK(prevGray, gray, prevPoints, currPoints, status, err);
 
-          if (extra.rows > 0) {
-            mergedFloats = goodCurrFloats.slice();
-            for (let i = 0; i < extra.rows; i++) {
-              mergedFloats.push(extra.data32F[i * 2], extra.data32F[i * 2 + 1]);
+          const goodCurrFloats = [];
+          for (let i = 0; i < status.rows; i++) {
+            if (status.data[i] === 1) {
+              goodCurrFloats.push(currPoints.data32F[i * 2], currPoints.data32F[i * 2 + 1]);
             }
           }
 
-          extra.delete();
-          mask.delete();
+          let mergedFloats = goodCurrFloats;
+          const goodCount = goodCurrFloats.length / 2;
+
+          if (goodCount < MIN_FEATURES) {
+            const want = Math.max(0, MAX_FEATURES - goodCount);
+            if (want > 0) {
+              const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
+              for (let i = 0; i < goodCount; i++) {
+                const x = goodCurrFloats[i * 2];
+                const y = goodCurrFloats[i * 2 + 1];
+                cv.circle(mask, new cv.Point(x, y), FEATURE_EXCLUSION_RADIUS, new cv.Scalar(0), -1);
+              }
+
+              const extra = new cv.Mat();
+              cv.goodFeaturesToTrack(gray, extra, want, FEATURE_QUALITY, FEATURE_MIN_DIST, mask);
+
+              if (extra.rows > 0) {
+                mergedFloats = goodCurrFloats.slice();
+                for (let i = 0; i < extra.rows; i++) {
+                  mergedFloats.push(extra.data32F[i * 2], extra.data32F[i * 2 + 1]);
+                }
+              }
+
+              extra.delete();
+              mask.delete();
+            }
+          }
+
+          debugFeaturePoints = [];
+          for (let i = 0; i < mergedFloats.length; i += 2) {
+            debugFeaturePoints.push({ x: mergedFloats[i], y: mergedFloats[i + 1] });
+          }
+
+          const nextPoints = mergedFloats.length
+            ? cv.matFromArray(mergedFloats.length / 2, 1, cv.CV_32FC2, mergedFloats)
+            : new cv.Mat(0, 1, cv.CV_32FC2);
+
+          prevGray.delete();
+          prevPoints.delete();
+          prevGray = gray.clone();
+          prevPoints = nextPoints;
+
+          currPoints.delete();
+          status.delete();
+          err.delete();
         }
+      } catch (e) {
+        console.warn('[Debug LK] disabled for safety:', e);
+        debugFeaturePoints = [];
+        prevGray?.delete?.();
+        prevGray = null;
+        prevPoints?.delete?.();
+        prevPoints = null;
       }
-
+    } else {
+      // Not debugging: avoid this extra LK work entirely.
       debugFeaturePoints = [];
-      for (let i = 0; i < mergedFloats.length; i += 2) {
-        debugFeaturePoints.push({ x: mergedFloats[i], y: mergedFloats[i + 1] });
-      }
-
-      const nextPoints = mergedFloats.length
-        ? cv.matFromArray(mergedFloats.length / 2, 1, cv.CV_32FC2, mergedFloats)
-        : new cv.Mat(0, 1, cv.CV_32FC2);
-
-      prevGray.delete();
-      prevPoints.delete();
-      prevGray = gray.clone();
-      prevPoints = nextPoints;
-
-      currPoints.delete();
-      status.delete();
-      err.delete();
+      prevGray?.delete?.();
+      prevGray = null;
+      prevPoints?.delete?.();
+      prevPoints = null;
     }
 
     try {
