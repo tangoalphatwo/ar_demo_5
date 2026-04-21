@@ -33,9 +33,11 @@ function matFromArray(rows, cols, type, array) {
 
 function normalizeTranslation(tvec) {
   return {
-    x:  tvec[0],
-    y: -tvec[1], // flip Y
-    z:  tvec[2]
+    // Keep raw OpenCV camera coordinates here (x right, y down, z forward).
+    // The renderer is responsible for converting to Three.js coordinates.
+    x: tvec[0],
+    y: tvec[1],
+    z: tvec[2]
   };
 }
 

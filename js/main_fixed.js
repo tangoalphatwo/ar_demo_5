@@ -69,6 +69,7 @@ window.addEventListener('load', () => {
   let running = false;
   let slam = null;
   let markerTracker = null;
+  let slamIntrinsics = null;
 
   // High-level state:
   // - Until we have a valid marker pose, we keep the world hidden.
@@ -361,6 +362,7 @@ window.addEventListener('load', () => {
         } catch (e) {
           console.warn('getPoseIntrinsics failed; falling back to heuristic intrinsics:', e);
         }
+        slamIntrinsics = intrinsics;
         slam = new SlamCoreClass(cvInstance, intrinsics);
       } else {
         slam = null;
@@ -727,6 +729,16 @@ window.addEventListener('load', () => {
     // Switch to SLAM-driven camera on the frame AFTER we initialize from the marker.
     if (enableSlamDrivingNextFrame) {
       slamDrivingCamera = true;
+
+      // Reset SLAM state on takeover so the next delta is computed relative to
+      // the post-marker-snap frame (prevents a huge delta / drift on handoff).
+      try {
+        if (SlamCoreClass && cvInstance) {
+          slam = new SlamCoreClass(cvInstance, slamIntrinsics);
+        }
+      } catch (e) {
+        console.warn('[SLAM] reset on takeover failed:', e);
+      }
 
       // Stop LK corner tracking state (it becomes stale once we stop per-frame marker updates).
       markerTracking = false;

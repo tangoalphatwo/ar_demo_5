@@ -235,7 +235,7 @@ export class ARRenderer {
 
     this.worldZeroRoot.position.set(
       pose.position.x,
-      pose.position.y,
+      -pose.position.y,
       -pose.position.z
     );
     this.worldZeroRoot.quaternion.copy(q);
@@ -259,7 +259,9 @@ export class ARRenderer {
     const r10 = r[3], r11 = r[4], r12 = r[5];
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
-    const tcw = new THREE.Vector3(pose.position.x, pose.position.y, -pose.position.z);
+    // pose.position is raw OpenCV camera coords (x right, y down, z forward).
+    // Convert to Three camera coords (x right, y up, z backward).
+    const tcw = new THREE.Vector3(pose.position.x, -pose.position.y, -pose.position.z);
 
     const Tcw = new THREE.Matrix4();
     Tcw.set(
