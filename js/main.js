@@ -83,6 +83,9 @@ window.addEventListener('load', () => {
   let markerTracking = false;
   let markerPrevGray = null;
   let markerPrevPts = null; // cv.Mat 4x1 CV_32FC2
+  let markerCurrPts = null; // cv.Mat 4x1 CV_32FC2 (reused LK output)
+  let markerLkStatus = null;
+  let markerLkErr = null;
   let lastStableMarkerPose = null;
 
   // ORB marker (re)detect is expensive; throttle it when the marker is lost.
@@ -132,6 +135,11 @@ window.addEventListener('load', () => {
 
   let prevGray = null;
   let prevPoints = null;
+
+  // Reused LK output mats for debug/feature tracking
+  let featureCurrPoints = null;
+  let featureLkStatus = null;
+  let featureLkErr = null;
 
   // Feature tracking / reseeding (for debug dots + pose heuristics)
   const MAX_FEATURES = 300;
@@ -527,15 +535,16 @@ window.addEventListener('load', () => {
         let cornersProc = null;
 
         if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
-          const currPts = new cv.Mat();
-          const status = new cv.Mat();
-          const err = new cv.Mat();
-          cv.calcOpticalFlowPyrLK(markerPrevGray, gray, markerPrevPts, currPts, status, err);
+          if (!markerCurrPts) markerCurrPts = new cv.Mat();
+          if (!markerLkStatus) markerLkStatus = new cv.Mat();
+          if (!markerLkErr) markerLkErr = new cv.Mat();
 
-          let ok = status.rows === 4;
+          cv.calcOpticalFlowPyrLK(markerPrevGray, gray, markerPrevPts, markerCurrPts, markerLkStatus, markerLkErr);
+
+          let ok = markerLkStatus.rows === 4;
           if (ok) {
             for (let i = 0; i < 4; i++) {
-              if (status.data[i] !== 1) {
+              if (markerLkStatus.data[i] !== 1) {
                 ok = false;
                 break;
               }
@@ -545,24 +554,29 @@ window.addEventListener('load', () => {
           if (ok) {
             cornersProc = [];
             for (let i = 0; i < 4; i++) {
-              cornersProc.push({ x: currPts.data32F[i * 2], y: currPts.data32F[i * 2 + 1] });
+              cornersProc.push({ x: markerCurrPts.data32F[i * 2], y: markerCurrPts.data32F[i * 2 + 1] });
             }
 
-            markerPrevGray.delete();
-            markerPrevGray = gray.clone();
-            markerPrevPts.delete();
-            markerPrevPts = currPts;
+            // Update previous-gray buffer without allocating a new Mat.
+            if (!markerPrevGray || markerPrevGray.rows !== gray.rows || markerPrevGray.cols !== gray.cols) {
+              markerPrevGray?.delete?.();
+              markerPrevGray = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1);
+            }
+            gray.copyTo(markerPrevGray);
+
+            // Swap point mats (reuses both Mats without copy/alloc).
+            const tmpPts = markerPrevPts;
+            markerPrevPts = markerCurrPts;
+            markerCurrPts = tmpPts;
           } else {
-            currPts.delete();
             markerTracking = false;
             markerPrevGray.delete();
             markerPrevGray = null;
             markerPrevPts.delete();
             markerPrevPts = null;
+            markerCurrPts?.delete?.();
+            markerCurrPts = null;
           }
-
-          status.delete();
-          err.delete();
         }
 
         if (!cornersProc) {
@@ -574,7 +588,8 @@ window.addEventListener('load', () => {
               cornersProc = det.corners;
 
               markerPrevGray?.delete?.();
-              markerPrevGray = gray.clone();
+              markerPrevGray = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1);
+              gray.copyTo(markerPrevGray);
               markerPrevPts?.delete?.();
               markerPrevPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
                 cornersProc[0].x, cornersProc[0].y,
@@ -582,6 +597,8 @@ window.addEventListener('load', () => {
                 cornersProc[2].x, cornersProc[2].y,
                 cornersProc[3].x, cornersProc[3].y
               ]);
+              markerCurrPts?.delete?.();
+              markerCurrPts = new cv.Mat();
               markerTracking = true;
               markerDetectCountdown = 0;
 
@@ -611,6 +628,8 @@ window.addEventListener('load', () => {
             markerPrevGray = null;
             markerPrevPts?.delete?.();
             markerPrevPts = null;
+            markerCurrPts?.delete?.();
+            markerCurrPts = null;
 
             cornersProc = null;
           } else if (markerNearEdge && slam) {
@@ -676,6 +695,8 @@ window.addEventListener('load', () => {
                 markerPrevGray = null;
                 markerPrevPts?.delete?.();
                 markerPrevPts = null;
+                markerCurrPts?.delete?.();
+                markerCurrPts = null;
               }
             } else {
               renderer.setAnchorPose(null);
@@ -710,84 +731,97 @@ window.addEventListener('load', () => {
       console.warn('Marker pose error:', e);
     }
 
-    if (showDebug && latestPose && debugInfo) {
-      const p = latestPose.position;
-      debugInfo.hidden = false;
-      debugInfo.setAttribute('aria-hidden', 'false');
-      debugInfo.textContent = `${debugInfo.textContent}\npose(m): x=${p.x.toFixed(3)} y=${p.y.toFixed(3)} z=${p.z.toFixed(3)}`;
-    }
-
-    if (!prevGray || !prevPoints || prevPoints.rows === 0) {
-      prevGray = gray.clone();
-      prevPoints = new cv.Mat();
-      cv.goodFeaturesToTrack(prevGray, prevPoints, MAX_FEATURES, FEATURE_QUALITY, FEATURE_MIN_DIST);
-
-      debugFeaturePoints = [];
-      for (let i = 0; i < prevPoints.rows; i++) {
-        debugFeaturePoints.push({
-          x: prevPoints.data32F[i * 2],
-          y: prevPoints.data32F[i * 2 + 1]
-        });
-      }
-    } else {
-      const currPoints = new cv.Mat();
-      const status = new cv.Mat();
-      const err = new cv.Mat();
-
-      cv.calcOpticalFlowPyrLK(prevGray, gray, prevPoints, currPoints, status, err);
-
-      const goodCurrFloats = [];
-      for (let i = 0; i < status.rows; i++) {
-        if (status.data[i] === 1) {
-          goodCurrFloats.push(currPoints.data32F[i * 2], currPoints.data32F[i * 2 + 1]);
+    // Feature tracking is only needed for debug overlay (or as a fallback pose demo when markerTracker is unavailable).
+    const needFeatureTracking = showDebug || !markerTracker;
+    if (needFeatureTracking) {
+      if (!prevGray || !prevPoints || prevPoints.rows === 0) {
+        if (!prevGray || prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {
+          prevGray?.delete?.();
+          prevGray = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1);
         }
-      }
+        gray.copyTo(prevGray);
 
-      let mergedFloats = goodCurrFloats;
-      const goodCount = goodCurrFloats.length / 2;
+        prevPoints?.delete?.();
+        prevPoints = new cv.Mat();
+        cv.goodFeaturesToTrack(prevGray, prevPoints, MAX_FEATURES, FEATURE_QUALITY, FEATURE_MIN_DIST);
 
-      if (goodCount < MIN_FEATURES) {
-        const want = Math.max(0, MAX_FEATURES - goodCount);
-        if (want > 0) {
-          const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
-          for (let i = 0; i < goodCount; i++) {
-            const x = goodCurrFloats[i * 2];
-            const y = goodCurrFloats[i * 2 + 1];
-            cv.circle(mask, new cv.Point(x, y), FEATURE_EXCLUSION_RADIUS, new cv.Scalar(0), -1);
+        debugFeaturePoints = [];
+        for (let i = 0; i < prevPoints.rows; i++) {
+          debugFeaturePoints.push({
+            x: prevPoints.data32F[i * 2],
+            y: prevPoints.data32F[i * 2 + 1]
+          });
+        }
+      } else {
+        if (!featureCurrPoints) featureCurrPoints = new cv.Mat();
+        if (!featureLkStatus) featureLkStatus = new cv.Mat();
+        if (!featureLkErr) featureLkErr = new cv.Mat();
+
+        cv.calcOpticalFlowPyrLK(prevGray, gray, prevPoints, featureCurrPoints, featureLkStatus, featureLkErr);
+
+        const goodCurrFloats = [];
+        for (let i = 0; i < featureLkStatus.rows; i++) {
+          if (featureLkStatus.data[i] === 1) {
+            goodCurrFloats.push(featureCurrPoints.data32F[i * 2], featureCurrPoints.data32F[i * 2 + 1]);
           }
+        }
 
-          const extra = new cv.Mat();
-          cv.goodFeaturesToTrack(gray, extra, want, FEATURE_QUALITY, FEATURE_MIN_DIST, mask);
+        let mergedFloats = goodCurrFloats;
+        const goodCount = goodCurrFloats.length / 2;
 
-          if (extra.rows > 0) {
-            mergedFloats = goodCurrFloats.slice();
-            for (let i = 0; i < extra.rows; i++) {
-              mergedFloats.push(extra.data32F[i * 2], extra.data32F[i * 2 + 1]);
+        if (goodCount < MIN_FEATURES) {
+          const want = Math.max(0, MAX_FEATURES - goodCount);
+          if (want > 0) {
+            const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
+            for (let i = 0; i < goodCount; i++) {
+              const x = goodCurrFloats[i * 2];
+              const y = goodCurrFloats[i * 2 + 1];
+              cv.circle(mask, new cv.Point(x, y), FEATURE_EXCLUSION_RADIUS, new cv.Scalar(0), -1);
             }
+
+            const extra = new cv.Mat();
+            cv.goodFeaturesToTrack(gray, extra, want, FEATURE_QUALITY, FEATURE_MIN_DIST, mask);
+
+            if (extra.rows > 0) {
+              mergedFloats = goodCurrFloats.slice();
+              for (let i = 0; i < extra.rows; i++) {
+                mergedFloats.push(extra.data32F[i * 2], extra.data32F[i * 2 + 1]);
+              }
+            }
+
+            extra.delete();
+            mask.delete();
           }
-
-          extra.delete();
-          mask.delete();
         }
+
+        debugFeaturePoints = [];
+        for (let i = 0; i < mergedFloats.length; i += 2) {
+          debugFeaturePoints.push({ x: mergedFloats[i], y: mergedFloats[i + 1] });
+        }
+
+        const nextRows = mergedFloats.length / 2;
+        if (!prevPoints || prevPoints.rows !== nextRows || prevPoints.type?.() !== cv.CV_32FC2) {
+          prevPoints?.delete?.();
+          prevPoints = new cv.Mat(nextRows, 1, cv.CV_32FC2);
+        } else {
+          // Ensure the backing buffer exists and is large enough
+          // (OpenCV.js allocates on demand for some Mats)
+          if (!prevPoints.data32F || prevPoints.data32F.length < mergedFloats.length) {
+            prevPoints.delete();
+            prevPoints = new cv.Mat(nextRows, 1, cv.CV_32FC2);
+          }
+        }
+
+        if (mergedFloats.length > 0) {
+          prevPoints.data32F.set(mergedFloats);
+        }
+
+        if (!prevGray || prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {
+          prevGray?.delete?.();
+          prevGray = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1);
+        }
+        gray.copyTo(prevGray);
       }
-
-      debugFeaturePoints = [];
-      for (let i = 0; i < mergedFloats.length; i += 2) {
-        debugFeaturePoints.push({ x: mergedFloats[i], y: mergedFloats[i + 1] });
-      }
-
-      const nextPoints = mergedFloats.length
-        ? cv.matFromArray(mergedFloats.length / 2, 1, cv.CV_32FC2, mergedFloats)
-        : new cv.Mat(0, 1, cv.CV_32FC2);
-
-      prevGray.delete();
-      prevPoints.delete();
-      prevGray = gray.clone();
-      prevPoints = nextPoints;
-
-      currPoints.delete();
-      status.delete();
-      err.delete();
     }
 
     try {
@@ -845,7 +879,10 @@ window.addEventListener('load', () => {
       if (debugInfo) {
         debugInfo.hidden = false;
         debugInfo.setAttribute('aria-hidden', 'false');
-        debugInfo.textContent = `drawRect:\noffsetX: ${drawRect.offsetX.toFixed(1)}\noffsetY: ${drawRect.offsetY.toFixed(1)}\ndrawW: ${drawRect.drawWidth.toFixed(1)}\ndrawH: ${drawRect.drawHeight.toFixed(1)}\nfeatures: ${debugFeaturePoints.length}`;
+        const poseLine = latestPose?.position
+          ? `\npose(m): x=${latestPose.position.x.toFixed(3)} y=${latestPose.position.y.toFixed(3)} z=${latestPose.position.z.toFixed(3)}`
+          : '';
+        debugInfo.textContent = `drawRect:\noffsetX: ${drawRect.offsetX.toFixed(1)}\noffsetY: ${drawRect.offsetY.toFixed(1)}\ndrawW: ${drawRect.drawWidth.toFixed(1)}\ndrawH: ${drawRect.drawHeight.toFixed(1)}\nfeatures: ${needFeatureTracking ? debugFeaturePoints.length : 0}${poseLine}`;
       }
     } else {
       if (debugInfo) {

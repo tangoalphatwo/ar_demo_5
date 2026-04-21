@@ -13,6 +13,7 @@ export class SlamCore {
         this.mapPoints = [];
         // 3D points triangulated from matched features (in camera coordinates)
         this.mapPoints3D = [];
+        this.rgba = null;
         this.gray = null;
         this.currGray = null;
         this.prevGray = null;
@@ -31,10 +32,26 @@ export class SlamCore {
     }
 
     _ensureMats(width, height) {
-        if (!this.gray) {
-            this.gray = new this.cv.Mat(height, width, this.cv.CV_8UC1);
-            this.currGray = new this.cv.Mat(height, width, this.cv.CV_8UC1);
-        }
+        const cv = this.cv;
+        const needsResize = !this.currGray || this.currGray.rows !== height || this.currGray.cols !== width;
+        if (!needsResize) return;
+
+        // Reset tracking state when frame size changes.
+        this.initialized = false;
+        try { this.prevPoints?.delete?.(); } catch {}
+        this.prevPoints = null;
+
+        // Free old buffers (if any)
+        try { this.rgba?.delete?.(); } catch {}
+        try { this.gray?.delete?.(); } catch {}
+        try { this.currGray?.delete?.(); } catch {}
+        try { this.prevGray?.delete?.(); } catch {}
+
+        // Persistent per-frame buffers
+        this.rgba = new cv.Mat(height, width, cv.CV_8UC4);
+        this.gray = new cv.Mat(height, width, cv.CV_8UC1);
+        this.currGray = new cv.Mat(height, width, cv.CV_8UC1);
+        this.prevGray = new cv.Mat(height, width, cv.CV_8UC1);
     }
 
     processFrame(imageData) {
@@ -48,12 +65,17 @@ export class SlamCore {
 
         this._ensureMats(width, height);
 
-        const rgbaMat = cv.matFromImageData(imageData);
-        cv.cvtColor(rgbaMat, this.currGray, cv.COLOR_RGBA2GRAY);
-        rgbaMat.delete();
+        // Avoid cv.matFromImageData() allocations: reuse a persistent RGBA Mat.
+        this.rgba.data.set(imageData.data);
+        cv.cvtColor(this.rgba, this.currGray, cv.COLOR_RGBA2GRAY);
 
         if (!this.initialized) {
-            this.prevGray = this.currGray.clone();
+            // Swap buffers so prevGray always holds the last-completed frame.
+            const tmp = this.prevGray;
+            this.prevGray = this.currGray;
+            this.currGray = tmp;
+
+            if (this.prevPoints) this.prevPoints.delete();
             this.prevPoints = this._detectFeatures(this.prevGray);
             this.initialized = true;
 
@@ -87,9 +109,12 @@ export class SlamCore {
         status.delete();
 
         if (goodPrevAll.length < 16) {
-            if (this.prevGray) this.prevGray.delete();
-            this.prevGray = this.currGray.clone();
             if (this.prevPoints) this.prevPoints.delete();
+
+            const tmp = this.prevGray;
+            this.prevGray = this.currGray;
+            this.currGray = tmp;
+
             this.prevPoints = this._detectFeatures(this.prevGray);
             return { pose: this.pose, mapPoints: this.mapPoints };
         }
@@ -117,7 +142,7 @@ export class SlamCore {
         const prevMat = cv.matFromArray(nPose, 2, cv.CV_64F, goodPrevPose);
         const currMat = cv.matFromArray(nPose, 2, cv.CV_64F, goodCurrPose);
         // For LK state into the next frame, preserve the typical Nx1 CV_32FC2 format
-        const currMatFlow = cv.matFromArray(nGoodAll, 1, cv.CV_32FC2, goodCurrAll);
+        let currMatFlow = cv.matFromArray(nGoodAll, 1, cv.CV_32FC2, goodCurrAll);
 
         const fx = this.intrinsics?.fx ?? 600;
         const fy = this.intrinsics?.fy ?? 600;
@@ -315,10 +340,15 @@ export class SlamCore {
                     }
                 }
 
-                if (this.prevGray) this.prevGray.delete();
-                this.prevGray = this.currGray.clone();
                 if (this.prevPoints) this.prevPoints.delete();
-                this.prevPoints = currMatFlow.clone();
+
+                const tmp = this.prevGray;
+                this.prevGray = this.currGray;
+                this.currGray = tmp;
+
+                // Adopt currMatFlow as next-frame LK input (avoid clone)
+                this.prevPoints = currMatFlow;
+                currMatFlow = null;
 
                 // Free per-frame pose mats after use
                 R.delete();
@@ -328,10 +358,14 @@ export class SlamCore {
                 console.warn('recoverPose failed:', err);
                 // Keep previous pose and skip triangulation for this frame
                 this.mapPoints3D = [];
-                if (this.prevGray) this.prevGray.delete();
-                this.prevGray = this.currGray.clone();
                 if (this.prevPoints) this.prevPoints.delete();
-                this.prevPoints = currMatFlow.clone();
+
+                const tmp = this.prevGray;
+                this.prevGray = this.currGray;
+                this.currGray = tmp;
+
+                this.prevPoints = currMatFlow;
+                currMatFlow = null;
 
                 // Free per-frame pose mats on failure too
                 R.delete();
@@ -343,10 +377,14 @@ export class SlamCore {
             // No essential matrix computed; skip pose update and triangulation this frame
             console.warn('Skipping pose recovery: no essential/fundamental computation available for this frame');
             this.mapPoints3D = [];
-            if (this.prevGray) this.prevGray.delete();
-            this.prevGray = this.currGray.clone();
             if (this.prevPoints) this.prevPoints.delete();
-            this.prevPoints = currMatFlow.clone();
+
+            const tmp = this.prevGray;
+            this.prevGray = this.currGray;
+            this.currGray = tmp;
+
+            this.prevPoints = currMatFlow;
+            currMatFlow = null;
 
             R.delete();
             t.delete();
