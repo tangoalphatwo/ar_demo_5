@@ -88,11 +88,12 @@ export class ARRenderer {
 
   saveHousePose() {
     try {
-      // Ensure matrix is current
-      this.houseRoot.updateMatrix();
+      // Persist house pose in world coordinates.
+      // (In the camera-tracked pipeline, worldZeroRoot stays fixed.)
+      this.houseRoot.updateMatrixWorld(true);
       localStorage.setItem(
         'ar_house_pose',
-        JSON.stringify({ matrix: this.houseRoot.matrix.toArray() })
+        JSON.stringify({ matrix: this.houseRoot.matrixWorld.toArray() })
       );
     } catch {
       // ignore storage failures
@@ -109,6 +110,7 @@ export class ARRenderer {
       this.houseRoot.matrixAutoUpdate = false;
       this.houseRoot.matrix.fromArray(data.matrix);
       this.houseRoot.matrix.decompose(this.houseRoot.position, this.houseRoot.quaternion, this.houseRoot.scale);
+      this.houseRoot.updateMatrixWorld(true);
       return true;
     } catch {
       return false;
@@ -125,10 +127,12 @@ export class ARRenderer {
   // NOTE: In a camera-tracked pipeline this would store camera.matrixWorld.
   // In this demo, the camera is fixed and worldZeroRoot moves, so we store worldZeroRoot.matrixWorld.
   setWorldZero() {
-    this.worldZeroRoot.updateMatrixWorld(true);
+    // Camera-tracked pipeline: persist the camera world pose at the moment the
+    // user declares "world zero".
+    this.camera.updateMatrixWorld(true);
 
-    this.worldZeroState.worldZeroMatrixAtZero.copy(this.worldZeroRoot.matrixWorld);
-    this.worldZeroState.worldZeroMatrixAtZeroInverse.copy(this.worldZeroRoot.matrixWorld).invert();
+    this.worldZeroState.worldZeroMatrixAtZero.copy(this.camera.matrixWorld);
+    this.worldZeroState.worldZeroMatrixAtZeroInverse.copy(this.camera.matrixWorld).invert();
     this.worldZeroState.isSet = true;
 
     this.saveWorldZero();

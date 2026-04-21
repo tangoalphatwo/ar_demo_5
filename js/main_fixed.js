@@ -52,10 +52,12 @@ window.addEventListener('load', () => {
           return;
         }
         if (!renderer?.worldZeroRoot?.visible) {
-          showToast('Show marker first');
+          showToast('Acquire marker first');
           return;
         }
         renderer.setWorldZero?.();
+        // Commit the house pose in world coordinates at the same time.
+        renderer.saveHousePose?.();
         showToast('World zero set');
       } catch (e) {
         console.warn('[WorldZero] set failed:', e);
@@ -67,6 +69,17 @@ window.addEventListener('load', () => {
   let running = false;
   let slam = null;
   let markerTracker = null;
+
+  // High-level state:
+  // - Until we have a valid marker pose, we keep the world hidden.
+  // - Once acquired, SLAM drives the camera pose (marker no longer drives runtime).
+  let markerAcquired = false;
+  let slamDrivingCamera = false;
+  let markerInitCountdown = 0;
+
+  // Require a few stable marker poses before SLAM takes over.
+  // This keeps handoff stable and allows slamMetricScale to converge.
+  const SLAM_TAKEOVER_AFTER_MARKER_FRAMES = 5;
 
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
@@ -520,8 +533,13 @@ window.addEventListener('load', () => {
     cv.cvtColor(frameRgbaMat, frameGrayMat, cv.COLOR_RGBA2GRAY);
     const gray = frameGrayMat;
 
+    let justInitializedFromMarker = false;
+    let enableSlamDrivingNextFrame = false;
+
     try {
-      if (markerTracker) {
+      // Marker acquisition path: use the marker to initialize the camera/world frame.
+      // After acquisition, SLAM drives the camera; marker tracking becomes optional.
+      if (markerTracker && !slamDrivingCamera) {
         let cornersProc = null;
 
         if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
@@ -634,8 +652,17 @@ window.addEventListener('load', () => {
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
-              renderer.setAnchorPose(pose);
-              logEvery(30, '[Marker] pose ok', pose.position);
+              renderer.setCameraFromMarkerPose?.(pose);
+              justInitializedFromMarker = true;
+              markerAcquired = true;
+
+              if (slam) {
+                if (markerInitCountdown <= 0) markerInitCountdown = SLAM_TAKEOVER_AFTER_MARKER_FRAMES;
+                markerInitCountdown = Math.max(0, markerInitCountdown - 1);
+                if (markerInitCountdown === 0) enableSlamDrivingNextFrame = true;
+              }
+
+              logEvery(30, '[Marker] pose ok (init camera)', pose.position);
 
               if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
                 const dx = pose.position.x - lastMarkerPoseForScale.position.x;
@@ -654,11 +681,9 @@ window.addEventListener('load', () => {
 
               lastMarkerPoseForScale = pose;
             } else if (lastStableMarkerPose) {
-              if (justAcquired || !slam) {
-                renderer.setAnchorPose(null);
-              } else {
-                renderer.setAnchorPose(lastStableMarkerPose);
-              }
+              // Keep the last stable pose while acquiring.
+              renderer.setCameraFromMarkerPose?.(lastStableMarkerPose);
+              justInitializedFromMarker = true;
 
               if (pose && justAcquired && !loggedReacquireRejection) {
                 loggedReacquireRejection = true;
@@ -676,7 +701,7 @@ window.addEventListener('load', () => {
                 markerPrevPts = null;
               }
             } else {
-              renderer.setAnchorPose(null);
+              renderer.setCameraFromMarkerPose?.(null);
             }
 
             if (!lastHadMarker) console.log('[Marker] acquired');
@@ -688,24 +713,40 @@ window.addEventListener('load', () => {
         if (!cornersProc) {
           framesSinceMarker++;
 
-          if (!slam) {
-            renderer.setAnchorPose(null);
-            if (lastHadMarker) console.log('[Marker] lost');
-            lastHadMarker = false;
-            return requestAnimationFrame(loop);
-          }
-
-          if (slamDelta && slamDelta.R && slamDelta.t) {
-            const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-            renderer.applySlamDeltaToAnchor?.(slamDelta.R, slamDelta.t, scale);
-          }
-
-          if (lastHadMarker) console.log('[Marker] lost');
+          // Still acquiring: hide content until we have a stable pose.
+          renderer.setCameraFromMarkerPose?.(null);
+          if (lastHadMarker) console.log('[Marker] lost (acquiring)');
           lastHadMarker = false;
+          // Keep running the frame loop so video/background continues rendering.
         }
       }
     } catch (e) {
       console.warn('Marker pose error:', e);
+    }
+
+    // Switch to SLAM-driven camera on the frame AFTER we initialize from the marker.
+    if (enableSlamDrivingNextFrame) {
+      slamDrivingCamera = true;
+
+      // Stop LK corner tracking state (it becomes stale once we stop per-frame marker updates).
+      markerTracking = false;
+      markerPrevGray?.delete?.();
+      markerPrevGray = null;
+      markerPrevPts?.delete?.();
+      markerPrevPts = null;
+    }
+
+    // SLAM-driven camera tracking (main runtime path).
+    if (slamDrivingCamera) {
+      if (slamDelta && slamDelta.R && slamDelta.t && !justInitializedFromMarker) {
+        const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
+        renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
+      }
+    } else {
+      // Not yet acquired: keep world hidden.
+      if (!markerAcquired) {
+        renderer.worldZeroRoot.visible = false;
+      }
     }
 
     if (showDebug && latestPose && debugInfo) {
