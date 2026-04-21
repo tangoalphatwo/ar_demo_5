@@ -5,6 +5,9 @@ import { CameraManager } from './camera.js';
 import { createToast } from './ui.js';
 
 const ENABLE_OPENCV_DIAGNOSTICS = window.__opencvDiagnostics === true;
+// Step-wise refactor flag: when true, use camera-tracked runtime path.
+// (Marker seeds camera pose; SLAM applies deltas to the camera.)
+const USE_CAMERA_TRACKED_RUNTIME = true;
 
 window.addEventListener('load', () => {
   const videoEl = document.getElementById('camera');
@@ -655,7 +658,11 @@ window.addEventListener('load', () => {
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
-              renderer.setAnchorPose(pose);
+              if (USE_CAMERA_TRACKED_RUNTIME) {
+                renderer.setCameraFromMarkerPose(pose);
+              } else {
+                renderer.setAnchorPose(pose);
+              }
               logEvery(30, '[Marker] pose ok', pose.position);
 
               if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
@@ -676,9 +683,17 @@ window.addEventListener('load', () => {
               lastMarkerPoseForScale = pose;
             } else if (lastStableMarkerPose) {
               if (justAcquired || !slam) {
-                renderer.setAnchorPose(null);
+                if (USE_CAMERA_TRACKED_RUNTIME) {
+                  renderer.setCameraFromMarkerPose(null);
+                } else {
+                  renderer.setAnchorPose(null);
+                }
               } else {
-                renderer.setAnchorPose(lastStableMarkerPose);
+                if (USE_CAMERA_TRACKED_RUNTIME) {
+                  renderer.setCameraFromMarkerPose(lastStableMarkerPose);
+                } else {
+                  renderer.setAnchorPose(lastStableMarkerPose);
+                }
               }
 
               if (pose && justAcquired && !loggedReacquireRejection) {
@@ -699,7 +714,11 @@ window.addEventListener('load', () => {
                 markerCurrPts = null;
               }
             } else {
-              renderer.setAnchorPose(null);
+              if (USE_CAMERA_TRACKED_RUNTIME) {
+                renderer.setCameraFromMarkerPose(null);
+              } else {
+                renderer.setAnchorPose(null);
+              }
             }
 
             if (!lastHadMarker) console.log('[Marker] acquired');
@@ -712,7 +731,11 @@ window.addEventListener('load', () => {
           framesSinceMarker++;
 
           if (!slam) {
-            renderer.setAnchorPose(null);
+            if (USE_CAMERA_TRACKED_RUNTIME) {
+              renderer.setCameraFromMarkerPose(null);
+            } else {
+              renderer.setAnchorPose(null);
+            }
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
             return requestAnimationFrame(loop);
@@ -720,7 +743,11 @@ window.addEventListener('load', () => {
 
           if (slamDelta && slamDelta.R && slamDelta.t) {
             const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-            renderer.applySlamDeltaToAnchor?.(slamDelta.R, slamDelta.t, scale);
+            if (USE_CAMERA_TRACKED_RUNTIME) {
+              renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
+            } else {
+              renderer.applySlamDeltaToAnchor?.(slamDelta.R, slamDelta.t, scale);
+            }
           }
 
           if (lastHadMarker) console.log('[Marker] lost');
