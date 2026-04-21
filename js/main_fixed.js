@@ -52,12 +52,10 @@ window.addEventListener('load', () => {
           return;
         }
         if (!renderer?.worldZeroRoot?.visible) {
-          showToast('Acquire marker first');
+          showToast('Show marker first');
           return;
         }
         renderer.setWorldZero?.();
-        // Commit the house pose in world coordinates at the same time.
-        renderer.saveHousePose?.();
         showToast('World zero set');
       } catch (e) {
         console.warn('[WorldZero] set failed:', e);
@@ -69,18 +67,6 @@ window.addEventListener('load', () => {
   let running = false;
   let slam = null;
   let markerTracker = null;
-  let slamIntrinsics = null;
-
-  // High-level state:
-  // - Until we have a valid marker pose, we keep the world hidden.
-  // - Once acquired, SLAM drives the camera pose (marker no longer drives runtime).
-  let markerAcquired = false;
-  let slamDrivingCamera = false;
-  let markerInitCountdown = 0;
-
-  // Require a few stable marker poses before SLAM takes over.
-  // This keeps handoff stable and allows slamMetricScale to converge.
-  const SLAM_TAKEOVER_AFTER_MARKER_FRAMES = 5;
 
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
@@ -362,7 +348,6 @@ window.addEventListener('load', () => {
         } catch (e) {
           console.warn('getPoseIntrinsics failed; falling back to heuristic intrinsics:', e);
         }
-        slamIntrinsics = intrinsics;
         slam = new SlamCoreClass(cvInstance, intrinsics);
       } else {
         slam = null;
@@ -535,13 +520,8 @@ window.addEventListener('load', () => {
     cv.cvtColor(frameRgbaMat, frameGrayMat, cv.COLOR_RGBA2GRAY);
     const gray = frameGrayMat;
 
-    let justInitializedFromMarker = false;
-    let enableSlamDrivingNextFrame = false;
-
     try {
-      // Marker acquisition path: use the marker to initialize the camera/world frame.
-      // After acquisition, SLAM drives the camera; marker tracking becomes optional.
-      if (markerTracker && !slamDrivingCamera) {
+      if (markerTracker) {
         let cornersProc = null;
 
         if (markerTracking && markerPrevGray && markerPrevPts && markerPrevPts.rows === 4) {
@@ -654,17 +634,8 @@ window.addEventListener('load', () => {
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
-              renderer.setCameraFromMarkerPose?.(pose);
-              justInitializedFromMarker = true;
-              markerAcquired = true;
-
-              if (slam) {
-                if (markerInitCountdown <= 0) markerInitCountdown = SLAM_TAKEOVER_AFTER_MARKER_FRAMES;
-                markerInitCountdown = Math.max(0, markerInitCountdown - 1);
-                if (markerInitCountdown === 0) enableSlamDrivingNextFrame = true;
-              }
-
-              logEvery(30, '[Marker] pose ok (init camera)', pose.position);
+              renderer.setAnchorPose(pose);
+              logEvery(30, '[Marker] pose ok', pose.position);
 
               if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
                 const dx = pose.position.x - lastMarkerPoseForScale.position.x;
@@ -683,9 +654,11 @@ window.addEventListener('load', () => {
 
               lastMarkerPoseForScale = pose;
             } else if (lastStableMarkerPose) {
-              // Keep the last stable pose while acquiring.
-              renderer.setCameraFromMarkerPose?.(lastStableMarkerPose);
-              justInitializedFromMarker = true;
+              if (justAcquired || !slam) {
+                renderer.setAnchorPose(null);
+              } else {
+                renderer.setAnchorPose(lastStableMarkerPose);
+              }
 
               if (pose && justAcquired && !loggedReacquireRejection) {
                 loggedReacquireRejection = true;
@@ -703,7 +676,7 @@ window.addEventListener('load', () => {
                 markerPrevPts = null;
               }
             } else {
-              renderer.setCameraFromMarkerPose?.(null);
+              renderer.setAnchorPose(null);
             }
 
             if (!lastHadMarker) console.log('[Marker] acquired');
@@ -715,50 +688,24 @@ window.addEventListener('load', () => {
         if (!cornersProc) {
           framesSinceMarker++;
 
-          // Still acquiring: hide content until we have a stable pose.
-          renderer.setCameraFromMarkerPose?.(null);
-          if (lastHadMarker) console.log('[Marker] lost (acquiring)');
+          if (!slam) {
+            renderer.setAnchorPose(null);
+            if (lastHadMarker) console.log('[Marker] lost');
+            lastHadMarker = false;
+            return requestAnimationFrame(loop);
+          }
+
+          if (slamDelta && slamDelta.R && slamDelta.t) {
+            const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
+            renderer.applySlamDeltaToAnchor?.(slamDelta.R, slamDelta.t, scale);
+          }
+
+          if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
-          // Keep running the frame loop so video/background continues rendering.
         }
       }
     } catch (e) {
       console.warn('Marker pose error:', e);
-    }
-
-    // Switch to SLAM-driven camera on the frame AFTER we initialize from the marker.
-    if (enableSlamDrivingNextFrame) {
-      slamDrivingCamera = true;
-
-      // Reset SLAM state on takeover so the next delta is computed relative to
-      // the post-marker-snap frame (prevents a huge delta / drift on handoff).
-      try {
-        if (SlamCoreClass && cvInstance) {
-          slam = new SlamCoreClass(cvInstance, slamIntrinsics);
-        }
-      } catch (e) {
-        console.warn('[SLAM] reset on takeover failed:', e);
-      }
-
-      // Stop LK corner tracking state (it becomes stale once we stop per-frame marker updates).
-      markerTracking = false;
-      markerPrevGray?.delete?.();
-      markerPrevGray = null;
-      markerPrevPts?.delete?.();
-      markerPrevPts = null;
-    }
-
-    // SLAM-driven camera tracking (main runtime path).
-    if (slamDrivingCamera) {
-      if (slamDelta && slamDelta.R && slamDelta.t && !justInitializedFromMarker) {
-        const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-        renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
-      }
-    } else {
-      // Not yet acquired: keep world hidden.
-      if (!markerAcquired) {
-        renderer.worldZeroRoot.visible = false;
-      }
     }
 
     if (showDebug && latestPose && debugInfo) {
@@ -768,106 +715,77 @@ window.addEventListener('load', () => {
       debugInfo.textContent = `${debugInfo.textContent}\npose(m): x=${p.x.toFixed(3)} y=${p.y.toFixed(3)} z=${p.z.toFixed(3)}`;
     }
 
-    // Debug-only feature overlay (separate from SLAM's internal tracking).
-    // This must never be allowed to crash the main loop.
-    if (showDebug) {
-      try {
-        // If the frame size changes, LK will throw; reset state.
-        if (prevGray && (prevGray.rows !== gray.rows || prevGray.cols !== gray.cols)) {
-          prevGray.delete();
-          prevGray = null;
-        }
+    if (!prevGray || !prevPoints || prevPoints.rows === 0) {
+      prevGray = gray.clone();
+      prevPoints = new cv.Mat();
+      cv.goodFeaturesToTrack(prevGray, prevPoints, MAX_FEATURES, FEATURE_QUALITY, FEATURE_MIN_DIST);
 
-        if (!prevGray || !prevPoints || prevPoints.rows === 0) {
-          prevGray?.delete?.();
-          prevPoints?.delete?.();
-
-          prevGray = gray.clone();
-          prevPoints = new cv.Mat();
-          cv.goodFeaturesToTrack(prevGray, prevPoints, MAX_FEATURES, FEATURE_QUALITY, FEATURE_MIN_DIST);
-
-          debugFeaturePoints = [];
-          for (let i = 0; i < prevPoints.rows; i++) {
-            debugFeaturePoints.push({
-              x: prevPoints.data32F[i * 2],
-              y: prevPoints.data32F[i * 2 + 1]
-            });
-          }
-        } else {
-          const currPoints = new cv.Mat();
-          const status = new cv.Mat();
-          const err = new cv.Mat();
-
-          cv.calcOpticalFlowPyrLK(prevGray, gray, prevPoints, currPoints, status, err);
-
-          const goodCurrFloats = [];
-          for (let i = 0; i < status.rows; i++) {
-            if (status.data[i] === 1) {
-              goodCurrFloats.push(currPoints.data32F[i * 2], currPoints.data32F[i * 2 + 1]);
-            }
-          }
-
-          let mergedFloats = goodCurrFloats;
-          const goodCount = goodCurrFloats.length / 2;
-
-          if (goodCount < MIN_FEATURES) {
-            const want = Math.max(0, MAX_FEATURES - goodCount);
-            if (want > 0) {
-              const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
-              for (let i = 0; i < goodCount; i++) {
-                const x = goodCurrFloats[i * 2];
-                const y = goodCurrFloats[i * 2 + 1];
-                cv.circle(mask, new cv.Point(x, y), FEATURE_EXCLUSION_RADIUS, new cv.Scalar(0), -1);
-              }
-
-              const extra = new cv.Mat();
-              cv.goodFeaturesToTrack(gray, extra, want, FEATURE_QUALITY, FEATURE_MIN_DIST, mask);
-
-              if (extra.rows > 0) {
-                mergedFloats = goodCurrFloats.slice();
-                for (let i = 0; i < extra.rows; i++) {
-                  mergedFloats.push(extra.data32F[i * 2], extra.data32F[i * 2 + 1]);
-                }
-              }
-
-              extra.delete();
-              mask.delete();
-            }
-          }
-
-          debugFeaturePoints = [];
-          for (let i = 0; i < mergedFloats.length; i += 2) {
-            debugFeaturePoints.push({ x: mergedFloats[i], y: mergedFloats[i + 1] });
-          }
-
-          const nextPoints = mergedFloats.length
-            ? cv.matFromArray(mergedFloats.length / 2, 1, cv.CV_32FC2, mergedFloats)
-            : new cv.Mat(0, 1, cv.CV_32FC2);
-
-          prevGray.delete();
-          prevPoints.delete();
-          prevGray = gray.clone();
-          prevPoints = nextPoints;
-
-          currPoints.delete();
-          status.delete();
-          err.delete();
-        }
-      } catch (e) {
-        console.warn('[Debug LK] disabled for safety:', e);
-        debugFeaturePoints = [];
-        prevGray?.delete?.();
-        prevGray = null;
-        prevPoints?.delete?.();
-        prevPoints = null;
+      debugFeaturePoints = [];
+      for (let i = 0; i < prevPoints.rows; i++) {
+        debugFeaturePoints.push({
+          x: prevPoints.data32F[i * 2],
+          y: prevPoints.data32F[i * 2 + 1]
+        });
       }
     } else {
-      // Not debugging: avoid this extra LK work entirely.
+      const currPoints = new cv.Mat();
+      const status = new cv.Mat();
+      const err = new cv.Mat();
+
+      cv.calcOpticalFlowPyrLK(prevGray, gray, prevPoints, currPoints, status, err);
+
+      const goodCurrFloats = [];
+      for (let i = 0; i < status.rows; i++) {
+        if (status.data[i] === 1) {
+          goodCurrFloats.push(currPoints.data32F[i * 2], currPoints.data32F[i * 2 + 1]);
+        }
+      }
+
+      let mergedFloats = goodCurrFloats;
+      const goodCount = goodCurrFloats.length / 2;
+
+      if (goodCount < MIN_FEATURES) {
+        const want = Math.max(0, MAX_FEATURES - goodCount);
+        if (want > 0) {
+          const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
+          for (let i = 0; i < goodCount; i++) {
+            const x = goodCurrFloats[i * 2];
+            const y = goodCurrFloats[i * 2 + 1];
+            cv.circle(mask, new cv.Point(x, y), FEATURE_EXCLUSION_RADIUS, new cv.Scalar(0), -1);
+          }
+
+          const extra = new cv.Mat();
+          cv.goodFeaturesToTrack(gray, extra, want, FEATURE_QUALITY, FEATURE_MIN_DIST, mask);
+
+          if (extra.rows > 0) {
+            mergedFloats = goodCurrFloats.slice();
+            for (let i = 0; i < extra.rows; i++) {
+              mergedFloats.push(extra.data32F[i * 2], extra.data32F[i * 2 + 1]);
+            }
+          }
+
+          extra.delete();
+          mask.delete();
+        }
+      }
+
       debugFeaturePoints = [];
-      prevGray?.delete?.();
-      prevGray = null;
-      prevPoints?.delete?.();
-      prevPoints = null;
+      for (let i = 0; i < mergedFloats.length; i += 2) {
+        debugFeaturePoints.push({ x: mergedFloats[i], y: mergedFloats[i + 1] });
+      }
+
+      const nextPoints = mergedFloats.length
+        ? cv.matFromArray(mergedFloats.length / 2, 1, cv.CV_32FC2, mergedFloats)
+        : new cv.Mat(0, 1, cv.CV_32FC2);
+
+      prevGray.delete();
+      prevPoints.delete();
+      prevGray = gray.clone();
+      prevPoints = nextPoints;
+
+      currPoints.delete();
+      status.delete();
+      err.delete();
     }
 
     try {
