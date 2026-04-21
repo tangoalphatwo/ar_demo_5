@@ -246,34 +246,42 @@ export class ARRenderer {
       return;
     }
 
-    // pose.rotationMatrix is row-major 3x3 from OpenCV (world/marker -> camera).
-    // Convert OpenCV camera coords (x right, y down, z forward)
-    // to Three camera coords (x right, y up, z backward): S = diag(1,-1,-1).
-    // Build T_cw in Three coords then invert to get T_wc.
+    // Principle: build the marker->camera transform using the *same* coordinate conversion as setAnchorPose
+    // (known-good), then invert it to get camera->world.
     const r = pose.rotationMatrix;
+
     const r00 = r[0], r01 = r[1], r02 = r[2];
     const r10 = r[3], r11 = r[4], r12 = r[5];
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
-    const tcw = new THREE.Vector3(pose.position.x, pose.position.y, -pose.position.z);
-
-    const Tcw = new THREE.Matrix4();
-    Tcw.set(
-      r00, -r01, -r02, tcw.x,
-      -r10, r11, r12, tcw.y,
-      -r20, r21, r22, tcw.z,
+    const Rthree = new THREE.Matrix4();
+    Rthree.set(
+      r00, -r01, -r02, 0,
+      -r10, r11, r12, 0,
+      -r20, r21, r22, 0,
       0, 0, 0, 1
     );
 
-    const Twc = Tcw.clone().invert();
+    const q = new THREE.Quaternion();
+    q.setFromRotationMatrix(Rthree);
+
+    // Temporarily treat worldZeroRoot as Tcw (marker/world -> camera)
+    this.worldZeroRoot.position.set(pose.position.x, pose.position.y, -pose.position.z);
+    this.worldZeroRoot.quaternion.copy(q);
+    this.worldZeroRoot.updateMatrixWorld(true);
+
+    const Twc = this.worldZeroRoot.matrixWorld.clone().invert();
 
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.copy(Twc);
     this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+    this.camera.matrixWorldNeedsUpdate = true;
+    this.camera.updateMatrixWorld(true);
 
-    // Keep world root at origin
+    // Keep world root fixed at origin in camera-tracked mode
     this.worldZeroRoot.position.set(0, 0, 0);
     this.worldZeroRoot.quaternion.set(0, 0, 0, 1);
+    this.worldZeroRoot.updateMatrixWorld(true);
     this.worldZeroRoot.visible = true;
   }
 
