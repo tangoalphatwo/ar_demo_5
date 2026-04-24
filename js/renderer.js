@@ -315,6 +315,8 @@ export class ARRenderer {
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.multiply(T12);
     this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+    this.camera.matrixWorldNeedsUpdate = true;
+    this.camera.updateMatrixWorld(true);
 
     // Keep world root at origin
     this.worldZeroRoot.position.set(0, 0, 0);
