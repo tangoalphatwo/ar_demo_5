@@ -1067,9 +1067,6 @@ window.addEventListener('load', () => {
       console.warn('Pose estimation error:', e);
     }
 
-    rgba.delete();
-    gray.delete();
-
     // DRAW
     const ctx = cvCanvas.getContext("2d");
     const drawRect = drawVideoPreserveAspect(ctx, videoEl, cvCanvas);
