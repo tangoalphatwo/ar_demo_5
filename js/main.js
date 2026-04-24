@@ -89,6 +89,10 @@ window.addEventListener('load', () => {
   // marker initializes camera/world alignment once, then SLAM drives the camera.
   let cameraSeededFromMarker = false;
 
+  // Reuse Mats for frame conversion (big perf win vs cv.matFromImageData each frame)
+  let frameRgbaMat = null;
+  let frameGrayMat = null;
+
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
   let lastHadMarker = false;
@@ -705,9 +709,21 @@ window.addEventListener('load', () => {
       console.warn('SLAM processing error:', err);
     }
 
-    const rgba = cv.matFromImageData(frame);
-    const gray = new cv.Mat();
-    cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
+    // Once seeded, SLAM continuously updates the *camera* pose.
+    if (cameraSeededFromMarker && slamDelta && slamDelta.R && slamDelta.t) {
+      const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
+      renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
+    }
+
+    if (!frameRgbaMat || frameRgbaMat.rows !== frame.height || frameRgbaMat.cols !== frame.width) {
+      frameRgbaMat?.delete?.();
+      frameGrayMat?.delete?.();
+      frameRgbaMat = new cv.Mat(frame.height, frame.width, cv.CV_8UC4);
+      frameGrayMat = new cv.Mat(frame.height, frame.width, cv.CV_8UC1);
+    }
+    frameRgbaMat.data.set(frame.data);
+    cv.cvtColor(frameRgbaMat, frameGrayMat, cv.COLOR_RGBA2GRAY);
+    const gray = frameGrayMat;
 
     // --- Marker-based pose (WorldZeroMarker.png, 4" x 4") ---
     try {
@@ -914,18 +930,10 @@ window.addEventListener('load', () => {
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
             // keep lastStableMarkerPose around for debugging, but don't render it.
-            rgba.delete();
-            gray.delete();
             return requestAnimationFrame(loop);
           }
 
-          // With SLAM enabled, update the *camera* using SLAM deltas once we've seeded.
-          if (cameraSeededFromMarker && slamDelta && slamDelta.R && slamDelta.t) {
-            const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-            renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
-          } else {
-            // no delta this frame; keep last camera pose
-          }
+          // SLAM deltas are applied every frame above once seeded.
 
           if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
