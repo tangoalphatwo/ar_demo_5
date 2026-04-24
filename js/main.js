@@ -85,6 +85,10 @@ window.addEventListener('load', () => {
   let markerTracker = null;
   let avocadoLoaded = false;
 
+  // Camera-tracked runtime state:
+  // marker initializes camera/world alignment once, then SLAM drives the camera.
+  let cameraSeededFromMarker = false;
+
   // Throttled logging to avoid spamming the console
   let frameIndex = 0;
   let lastHadMarker = false;
@@ -830,8 +834,11 @@ window.addEventListener('load', () => {
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
-              // Known-good path: render content directly from marker pose.
-              renderer.setAnchorPose(pose);
+              // Camera-tracked path: use marker to seed camera/world alignment once.
+              if (!cameraSeededFromMarker) {
+                renderer.setCameraFromMarkerPose(pose);
+                cameraSeededFromMarker = true;
+              }
               logEvery(30, '[Marker] pose ok', pose.position);
 
               // Learn SLAM metric scale when both marker pose and SLAM delta are available
@@ -856,9 +863,10 @@ window.addEventListener('load', () => {
               // If we have a prior pose, keep it unless this is a reacquire attempt.
               // Without SLAM, a stale pose looks "stuck to the screen", so hide on reacquire failures.
               if (justAcquired || !slam) {
-                renderer.setAnchorPose(null);
+                // If we haven't seeded yet, don't render (prevents “stuck to screen” look).
+                if (!cameraSeededFromMarker) renderer.setCameraFromMarkerPose(null);
               } else {
-                renderer.setAnchorPose(lastStableMarkerPose);
+                // Once seeded, let SLAM maintain pose. Do not re-apply marker pose every frame.
               }
 
               if (pose && poseOk) {
@@ -884,7 +892,7 @@ window.addEventListener('load', () => {
                 markerPrevPts = null;
               }
             } else {
-              renderer.setAnchorPose(null);
+              if (!cameraSeededFromMarker) renderer.setCameraFromMarkerPose(null);
               if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
             }
 
@@ -901,7 +909,8 @@ window.addEventListener('load', () => {
           // Without SLAM (camera tracking), we cannot keep a stable world anchor.
           // Freezing the last pose makes the model look stuck to the screen.
           if (!slam) {
-            renderer.setAnchorPose(null);
+            // No SLAM to maintain pose. If we haven't seeded yet, keep hidden.
+            if (!cameraSeededFromMarker) renderer.setCameraFromMarkerPose(null);
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
             // keep lastStableMarkerPose around for debugging, but don't render it.
@@ -910,10 +919,10 @@ window.addEventListener('load', () => {
             return requestAnimationFrame(loop);
           }
 
-          // With SLAM enabled, we'll update the content pose using SLAM deltas (see renderer).
-          if (slamDelta && slamDelta.R && slamDelta.t) {
+          // With SLAM enabled, update the *camera* using SLAM deltas once we've seeded.
+          if (cameraSeededFromMarker && slamDelta && slamDelta.R && slamDelta.t) {
             const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-            renderer.applySlamDeltaToAnchor?.(slamDelta.R, slamDelta.t, scale);
+            renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
           } else {
             // no delta this frame; keep last camera pose
           }
