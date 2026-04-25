@@ -846,11 +846,14 @@ window.addEventListener('load', () => {
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
-                // Camera-tracked path: update camera from marker every frame it is visible.
-                // This continuously corrects any SLAM drift rather than seeding only once.
-                renderer.setCameraFromMarkerPose(pose);
-                markerVisibleThisFrame = true;
-                if (!cameraSeededFromMarker) {
+              // Camera-tracked path: update camera from marker every frame it is visible.
+              // This continuously corrects any SLAM drift rather than seeding only once.
+              renderer.setCameraFromMarkerPose(pose);
+              markerVisibleThisFrame = true;
+              if (!cameraSeededFromMarker) {
+                cameraSeededFromMarker = true;
+              }
+              logEvery(30, '[Marker] pose ok', pose.position);
 
               // Learn SLAM metric scale when both marker pose and SLAM delta are available
               if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
