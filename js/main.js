@@ -699,6 +699,8 @@ window.addEventListener('load', () => {
 
     // Feed the raw frame to the SLAM core
     let slamDelta = null;
+    // True when the marker provided an accepted pose this frame; SLAM only runs as fallback.
+    let markerVisibleThisFrame = false;
     try {
       if (slam) {
         const res = slam.processFrame(frame);
@@ -707,12 +709,6 @@ window.addEventListener('load', () => {
     } catch (err) {
       // SLAM is optional; keep AR running even if it fails
       console.warn('SLAM processing error:', err);
-    }
-
-    // Once seeded, SLAM continuously updates the *camera* pose.
-    if (cameraSeededFromMarker && slamDelta && slamDelta.R && slamDelta.t) {
-      const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-      renderer.applySlamDelta?.(slamDelta.R, slamDelta.t, scale);
     }
 
     if (!frameRgbaMat || frameRgbaMat.rows !== frame.height || frameRgbaMat.cols !== frame.width) {
@@ -850,12 +846,11 @@ window.addEventListener('load', () => {
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
-              // Camera-tracked path: use marker to seed camera/world alignment once.
-              if (!cameraSeededFromMarker) {
+                // Camera-tracked path: update camera from marker every frame it is visible.
+                // This continuously corrects any SLAM drift rather than seeding only once.
                 renderer.setCameraFromMarkerPose(pose);
-                cameraSeededFromMarker = true;
-              }
-              logEvery(30, '[Marker] pose ok', pose.position);
+                markerVisibleThisFrame = true;
+                if (!cameraSeededFromMarker) {
 
               // Learn SLAM metric scale when both marker pose and SLAM delta are available
               if (slamDelta && slamDelta.R && slamDelta.t && lastMarkerPoseForScale) {
@@ -933,7 +928,7 @@ window.addEventListener('load', () => {
             return requestAnimationFrame(loop);
           }
 
-          // SLAM deltas are applied every frame above once seeded.
+          // SLAM will be applied below as a fallback when marker is not visible this frame.
 
           if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
@@ -941,6 +936,14 @@ window.addEventListener('load', () => {
       }
     } catch (e) {
       console.warn('Marker pose error:', e);
+    }
+
+    // SLAM fallback: only drive the camera when the marker is not providing a pose this frame.
+    // Keeping marker as the primary source prevents SLAM drift from accumulating while the
+    // marker is visible, and lets SLAM maintain pose smoothly when the marker is out of view.
+    if (!markerVisibleThisFrame && cameraSeededFromMarker && slamDelta?.R && slamDelta?.t) {
+      const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
+      renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
     }
 
     // Occasional pose debug
