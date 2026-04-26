@@ -738,7 +738,10 @@ window.addEventListener('load', () => {
           const currPts = new cv.Mat();
           const status = new cv.Mat();
           const err = new cv.Mat();
-          cv.calcOpticalFlowPyrLK(markerPrevGray, gray, markerPrevPts, currPts, status, err);
+          cv.calcOpticalFlowPyrLK(
+            markerPrevGray, gray, markerPrevPts, currPts, status, err,
+            new cv.Size(31, 31), 4
+          );
 
           let ok = status.rows === 4;
           if (ok) {
@@ -881,6 +884,10 @@ window.addEventListener('load', () => {
               }
 
               lastMarkerPoseForScale = pose;
+
+              if (!lastHadMarker) console.log('[Marker] acquired');
+              lastHadMarker = true;
+              framesSinceMarker = 0;
             } else if (lastStableMarkerPose) {
               // If we have a prior pose, keep it unless this is a reacquire attempt.
               // Without SLAM, a stale pose looks "stuck to the screen", so hide on reacquire failures.
@@ -905,22 +912,21 @@ window.addEventListener('load', () => {
                 });
               }
 
-              // If pose is implausible, reset tracking so we don't keep following bad corners.
+              // If pose is implausible, reset tracking AND throttle ORB so we don't
+              // immediately re-detect a bad homography on the very next frame.
               if (pose && !poseOk) {
                 markerTracking = false;
                 markerPrevGray?.delete?.();
                 markerPrevGray = null;
                 markerPrevPts?.delete?.();
                 markerPrevPts = null;
+                markerDetectCountdown = MARKER_DETECT_EVERY_N_FRAMES;
               }
             } else {
               if (!cameraSeededFromMarker) renderer.setCameraFromMarkerPose(null);
               if (pose === null) logEvery(30, '[Marker] pose null (solvePnP failed)');
             }
-
-            if (!lastHadMarker) console.log('[Marker] acquired');
-            lastHadMarker = true;
-            framesSinceMarker = 0;
+            // NOTE: lastHadMarker / framesSinceMarker are updated only inside if (acceptPose) above.
           }
         }
 

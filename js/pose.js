@@ -8,7 +8,7 @@ let lastPose = null;
 let lastRvecArr = null; // length 3
 let lastTvecArr = null; // length 3
 
-const SMOOTHING = 0.85; // closer to 1 = smoother
+const SMOOTHING = 0.0; // 0 = raw solvePnP output, no lag; position and rotationMatrix are now consistent
 
 function smoothValue(prev, next) {
   return prev * SMOOTHING + next * (1 - SMOOTHING);

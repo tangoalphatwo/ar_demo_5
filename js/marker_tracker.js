@@ -138,7 +138,7 @@ export class MarkerTracker {
     }
     matches.delete?.();
 
-    if (good.length < 12) {
+    if (good.length < 20) {
       for (const gm of good) gm.delete?.();
       frameKeypoints.delete();
       frameDescriptors.delete();
@@ -202,6 +202,36 @@ export class MarkerTracker {
       });
     }
     proj.delete();
+
+    // Reject degenerate or physically impossible quads before they seed LK or PnP.
+    // A bad homography (too few inliers, repeated features) can project corners
+    // to wildly wrong positions (e.g. implying z=4m when marker is at 0.6m).
+
+    // 1. Minimum projected area: reject near-point or extremely small quads.
+    const quadArea = Math.abs(
+      (corners[0].x * (corners[1].y - corners[3].y) +
+       corners[1].x * (corners[2].y - corners[0].y) +
+       corners[2].x * (corners[3].y - corners[1].y) +
+       corners[3].x * (corners[0].y - corners[2].y)) / 2
+    );
+    if (quadArea < 400) {
+      H.delete();
+      return null;
+    }
+
+    // 2. Convexity: all consecutive-edge cross products must share the same sign.
+    const cross2d = (ax, ay, bx, by) => ax * by - ay * bx;
+    const edgeSigns = [];
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i];
+      const b = corners[(i + 1) % 4];
+      const c = corners[(i + 2) % 4];
+      edgeSigns.push(cross2d(b.x - a.x, b.y - a.y, c.x - b.x, c.y - b.y));
+    }
+    if (!(edgeSigns.every(s => s > 0) || edgeSigns.every(s => s < 0))) {
+      H.delete();
+      return null;
+    }
 
     return { corners, homography: H };
   }
