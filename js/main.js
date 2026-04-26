@@ -452,6 +452,14 @@ window.addEventListener('load', () => {
         if (videoMetadataPending || videoEl.readyState >= 1) {
           initPose(videoEl, cvInstance);
           console.log('[Init] Pose intrinsics initialized');
+          // Sync the Three.js camera FOV to the real camera's intrinsics.
+          // A mismatched FOV causes the 3D overlay to never align with the video.
+          const intr = getPoseIntrinsics();
+          if (intr?.fy && intr?.cy) {
+            renderer.setCameraIntrinsics(intr.fx, intr.fy, intr.cx, intr.cy);
+            console.log('[Init] Three.js FOV synced to intrinsics, fov=',
+              (2 * Math.atan(intr.cy / intr.fy) * 180 / Math.PI).toFixed(1) + '°');
+          }
         }
       } catch (e) {
         console.warn('initPose failed (OpenCV may not be ready):', e);
@@ -923,12 +931,12 @@ window.addEventListener('load', () => {
           // Without SLAM (camera tracking), we cannot keep a stable world anchor.
           // Freezing the last pose makes the model look stuck to the screen.
           if (!slam) {
-            // No SLAM to maintain pose. If we haven't seeded yet, keep hidden.
+            // No SLAM available. Freeze the camera at the last known pose so the
+            // house stays visible (it will drift on screen as the user moves, but
+            // won't instantly disappear). Execution falls through to renderer.render().
             if (!cameraSeededFromMarker) renderer.setCameraFromMarkerPose(null);
             if (lastHadMarker) console.log('[Marker] lost');
             lastHadMarker = false;
-            // keep lastStableMarkerPose around for debugging, but don't render it.
-            return requestAnimationFrame(loop);
           }
 
           // SLAM will be applied below as a fallback when marker is not visible this frame.
@@ -957,6 +965,8 @@ window.addEventListener('load', () => {
       debugInfo.textContent = `${debugInfo.textContent}\npose(m): x=${p.x.toFixed(3)} y=${p.y.toFixed(3)} z=${p.z.toFixed(3)}`;
     }
 
+    // Debug feature dots are expensive (full LK pass + feature detect). Only run when visible.
+    if (showDebug) {
     if (!prevGray || !prevPoints || prevPoints.rows === 0) {
       // FIRST FRAME (or fully lost): detect features
       prevGray = gray.clone();
@@ -1039,6 +1049,7 @@ window.addEventListener('load', () => {
       status.delete();
       err.delete();
     }
+    } // end if (showDebug)
 
     // Try pose estimation when we have a viable 4-point set
     try {

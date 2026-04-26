@@ -121,6 +121,15 @@ export class ARRenderer {
     return { worldZeroLoaded: wz, housePoseLoaded: hp };
   }
 
+  // Match the Three.js camera projection to the real camera's intrinsics.
+  // Without this, the rendered overlay uses a different FOV than the video,
+  // so 3D content will never stay pinned to the correct real-world position.
+  setCameraIntrinsics(fx, fy, cx, cy) {
+    // Vertical FOV: 2 * atan(half_image_height_px / focal_length_y_px)
+    this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(cy / fy));
+    this.camera.updateProjectionMatrix();
+  }
+
   // Save the current tracking frame as "world zero".
   // NOTE: In a camera-tracked pipeline this would store camera.matrixWorld.
   // In this demo, the camera is fixed and worldZeroRoot moves, so we store worldZeroRoot.matrixWorld.
