@@ -66,15 +66,15 @@ window.addEventListener('load', () => {
   if (setWorldZeroBtn) {
     setWorldZeroBtn.addEventListener('click', () => {
       try {
-        if (!renderer?.worldZeroRoot?.visible) {
+        if (!cameraSeededFromMarker) {
           showToast('Show marker first');
           return;
         }
         renderer.setWorldZero?.();
-        showToast('World zero set');
+        showToast('World zero reset');
       } catch (e) {
-        console.warn('[WorldZero] set failed:', e);
-        showToast('Failed to set world zero');
+        console.warn('[WorldZero] reset failed:', e);
+        showToast('Failed to reset world zero');
       }
     });
   }
@@ -111,6 +111,14 @@ window.addEventListener('load', () => {
   // ORB marker (re)detect is expensive; throttle it when the marker is lost.
   const MARKER_DETECT_EVERY_N_FRAMES = 3;
   let markerDetectCountdown = 0;
+
+  // Frames to hold camera pose frozen after marker loss before allowing SLAM to move it.
+  // Prevents the brief-flicker case from immediately drifting the scene.
+  const SLAM_GRACE_FRAMES = 8;
+  let slamGraceCountdown = 0;
+
+  // Minimum tracked features required before trusting a SLAM delta.
+  const MIN_SLAM_FEATURES = 30;
 
   // SLAM scale estimation using marker PnP while marker is visible
   let slamMetricScale = 0.0;
@@ -319,7 +327,7 @@ window.addEventListener('load', () => {
     throw new Error("OpenCV not found");
   }
 
-  startBtn.addEventListener("click", async () => {
+  async function startAR() {
     if (running) return; // prevent double-starts
     try {
       // Button UX: show state immediately
@@ -505,11 +513,9 @@ window.addEventListener('load', () => {
       const nativeSize = renderer.computeBoundingSize(renderer.model);
       if (nativeSize) console.log('Model native bbox (scene units):', nativeSize);
 
-      renderer.model.position.set(0, 0, -0.02); // 2cm above marker plane
-      // Many GLB exports are Y-forward; Three.js expects -Z forward. Rotate so the model faces forward.
-      // If the model appears upside down, add a 180° roll (Z).
+      renderer.model.position.set(0, 0, 0);
       renderer.model.rotation.set(-Math.PI / 2, 0, Math.PI);
-      renderer.model.scale.setScalar(0.002); // 2x larger than before
+      renderer.model.scale.setScalar(0.006); // ~13cm wide, visible at arm's length
 
       const scaledSize = renderer.computeBoundingSize(renderer.model);
       if (scaledSize) console.log('Model scaled bbox (scene units):', scaledSize);
@@ -557,7 +563,16 @@ window.addEventListener('load', () => {
         startBtn.hidden = false;
       }
     }
+  }
+
+  // Try to auto-start immediately. On iOS, getUserMedia requires a user gesture,
+  // so this will fail silently and fall back to showing the Start button.
+  startAR().catch(() => {
+    if (startBtn) startBtn.hidden = false;
   });
+  if (startBtn) {
+    startBtn.addEventListener('click', () => startAR());
+  }
 
   function drawFeatures(points) {
     if (!points || points.length === 0) return;
@@ -855,8 +870,11 @@ window.addEventListener('load', () => {
               // This continuously corrects any SLAM drift rather than seeding only once.
               renderer.setCameraFromMarkerPose(pose);
               markerVisibleThisFrame = true;
+              slamGraceCountdown = 0; // marker is visible — no grace needed
               if (!cameraSeededFromMarker) {
                 cameraSeededFromMarker = true;
+                renderer.setWorldZero(); // auto-anchor world zero on first good detection
+                console.log('[AR] World zero anchored automatically');
               }
               logEvery(30, '[Marker] pose ok', pose.position);
 
@@ -941,7 +959,10 @@ window.addEventListener('load', () => {
 
           // SLAM will be applied below as a fallback when marker is not visible this frame.
 
-          if (lastHadMarker) console.log('[Marker] lost');
+          if (lastHadMarker) {
+            console.log('[Marker] lost');
+            slamGraceCountdown = SLAM_GRACE_FRAMES;
+          }
           lastHadMarker = false;
         }
       }
@@ -953,15 +974,27 @@ window.addEventListener('load', () => {
     // Keeping marker as the primary source prevents SLAM drift from accumulating while the
     // marker is visible, and lets SLAM maintain pose smoothly when the marker is out of view.
     if (!markerVisibleThisFrame && cameraSeededFromMarker && slamDelta?.R && slamDelta?.t) {
-      const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-      // Clamp large deltas — noisy essential-matrix output can teleport the camera,
-      // moving world origin (the house) out of the camera frustum and making it "despawn".
-      const dt = slamDelta.t;
-      const deltaMag = Math.sqrt(dt[0]*dt[0] + dt[1]*dt[1] + dt[2]*dt[2]) * scale;
-      if (deltaMag < 0.10) {
-        renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
+      if (slamGraceCountdown > 0) {
+        // Marker was just lost — hold the camera frozen for a few frames so brief
+        // occlusions don't kick off noisy SLAM motion immediately.
+        slamGraceCountdown--;
+        logEvery(4, '[SLAM] grace hold, countdown=', slamGraceCountdown);
       } else {
-        logEvery(15, '[SLAM] delta clamped, mag=', deltaMag.toFixed(3) + 'm');
+        const hasEnoughFeatures = !slam || (slam.lastTrackedCount ?? 0) >= MIN_SLAM_FEATURES;
+        if (hasEnoughFeatures) {
+          const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
+          // Clamp large deltas — noisy essential-matrix output can teleport the camera,
+          // moving world origin (the house) out of the camera frustum and making it "despawn".
+          const dt = slamDelta.t;
+          const deltaMag = Math.sqrt(dt[0]*dt[0] + dt[1]*dt[1] + dt[2]*dt[2]) * scale;
+          if (deltaMag < 0.10) {
+            renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
+          } else {
+            logEvery(15, '[SLAM] delta clamped, mag=', deltaMag.toFixed(3) + 'm');
+          }
+        } else {
+          logEvery(15, '[SLAM] skipped, low feature count:', slam?.lastTrackedCount);
+        }
       }
     }
 

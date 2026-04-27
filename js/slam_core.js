@@ -21,6 +21,9 @@ export class SlamCore {
 
         // Per-frame delta from recoverPose (camera1->camera2)
         this.lastDelta = null;
+        // Number of LK-tracked feature points available this frame.
+        // main.js uses this to skip SLAM when tracking quality is poor.
+        this.lastTrackedCount = 0;
 
         // Performance knobs
         this.maxTrackFeatures = 200;
@@ -103,6 +106,7 @@ export class SlamCore {
                 );
             }
         }
+        this.lastTrackedCount = goodPrevAll.length / 2;
 
         // Done with LK output mats (we copy data into JS arrays above)
         currPoints.delete();
