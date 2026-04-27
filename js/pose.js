@@ -65,7 +65,10 @@ export function initPose(video, cv) {
   const width  = video.videoWidth;
   const height = video.videoHeight;
 
-  const focalLength = width;
+  // Smartphone sensors are physically landscape-oriented. In portrait mode videoWidth
+  // is the SHORT side, so using it as focal length gives a ~33% wrong intrinsic matrix.
+  // The correct approximation for a standard phone camera is the LONG side of the image.
+  const focalLength = Math.max(width, height);
 
   cameraMatrix = matFromArray(3, 3, cvModule.CV_64F, [
     focalLength, 0, width / 2,

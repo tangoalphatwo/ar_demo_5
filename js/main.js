@@ -181,6 +181,26 @@ window.addEventListener('load', () => {
     return [tl, tr, br, bl];
   }
 
+  // Helpers for validating LK-tracked marker quads.
+  function quadSignedArea(pts) {
+    return (pts[0].x * (pts[1].y - pts[3].y) +
+            pts[1].x * (pts[2].y - pts[0].y) +
+            pts[2].x * (pts[3].y - pts[1].y) +
+            pts[3].x * (pts[0].y - pts[2].y)) / 2;
+  }
+  function quadIsConvex(pts) {
+    const cross = (ax, ay, bx, by) => ax * by - ay * bx;
+    const s = [];
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i], b = pts[(i + 1) % 4], c = pts[(i + 2) % 4];
+      s.push(cross(b.x - a.x, b.y - a.y, c.x - b.x, c.y - b.y));
+    }
+    return s.every(v => v > 0) || s.every(v => v < 0);
+  }
+
+  // Seeded area from ORB detection — LK-tracked quads are validated against this.
+  let lastMarkerDetectArea = 0;
+
   function poseLooksPlausible(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) return false;
     const { x, y, z } = pose.position;
@@ -765,10 +785,26 @@ window.addEventListener('load', () => {
               cornersProc.push({ x: currPts.data32F[i * 2], y: currPts.data32F[i * 2 + 1] });
             }
 
-            markerPrevGray.delete();
-            markerPrevGray = gray.clone();
-            markerPrevPts.delete();
-            markerPrevPts = currPts;
+            // Validate the tracked quad hasn't drifted into a degenerate shape.
+            // LK can report status=1 even when corners have slid off the marker.
+            const trackedArea = Math.abs(quadSignedArea(cornersProc));
+            const areaOk = lastMarkerDetectArea <= 0 ||
+              (trackedArea > lastMarkerDetectArea / 5 && trackedArea < lastMarkerDetectArea * 5);
+            const convexOk = quadIsConvex(cornersProc);
+
+            if (!areaOk || !convexOk) {
+              // Corners have drifted — drop LK state and let ORB re-detect.
+              cornersProc = null;
+              currPts.delete();
+              markerTracking = false;
+              markerPrevGray.delete(); markerPrevGray = null;
+              markerPrevPts.delete(); markerPrevPts = null;
+            } else {
+              markerPrevGray.delete();
+              markerPrevGray = gray.clone();
+              markerPrevPts.delete();
+              markerPrevPts = currPts;
+            }
           } else {
             currPts.delete();
             markerTracking = false;
@@ -790,6 +826,7 @@ window.addEventListener('load', () => {
             const det = markerTracker.detect(gray);
             if (det && det.corners && det.corners.length === 4) {
               cornersProc = det.corners;
+              lastMarkerDetectArea = Math.abs(quadSignedArea(cornersProc));
 
               // Seed tracking state
               markerPrevGray?.delete?.();
