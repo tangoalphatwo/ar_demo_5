@@ -8,6 +8,13 @@ export class CameraManager {
 
     this.lastDrawRect = null;
     this.lastDpr = 1;
+
+    // Dedicated small canvas for OpenCV processing at video-native resolution.
+    // Bypasses the DPR-scaled display canvas, keeping all CV ops fast on mobile.
+    this.procCanvas = document.createElement('canvas');
+    this.procCanvas.width = 1;
+    this.procCanvas.height = 1;
+    this.procCtx = this.procCanvas.getContext('2d', { willReadFrequently: true });
   }
 
   async start() {
@@ -88,6 +95,34 @@ export class CameraManager {
       imageData: this.cvCtx.getImageData(0, 0, w, h),
       drawRect,
       dpr: this.lastDpr
+    };
+  }
+
+  // Returns an ImageData captured directly from the video at native resolution.
+  // This is used exclusively for OpenCV processing — no letterboxing, no DPR scaling.
+  // Points returned by ORB/LK in this space map 1:1 to video pixel coords.
+  grabProcFrame() {
+    if (!this.ready) return null;
+    const vw = this.video.videoWidth;
+    const vh = this.video.videoHeight;
+    if (!vw || !vh) return null;
+
+    // Cap the long side at 640px so OpenCV stays fast on all devices.
+    const maxDim = 640;
+    const scale = Math.min(1, maxDim / Math.max(vw, vh));
+    const pw = Math.round(vw * scale);
+    const ph = Math.round(vh * scale);
+
+    if (this.procCanvas.width !== pw || this.procCanvas.height !== ph) {
+      this.procCanvas.width = pw;
+      this.procCanvas.height = ph;
+    }
+
+    this.procCtx.drawImage(this.video, 0, 0, pw, ph);
+    return {
+      imageData: this.procCtx.getImageData(0, 0, pw, ph),
+      procWidth: pw,
+      procHeight: ph
     };
   }
 }

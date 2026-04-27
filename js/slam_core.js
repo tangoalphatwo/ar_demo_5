@@ -54,7 +54,7 @@ export class SlamCore {
         this.prevGray = new cv.Mat(height, width, cv.CV_8UC1);
     }
 
-    processFrame(imageData) {
+    processFrame(imageData, skipPoseRecovery = false) {
         const cv = this.cv;
 
         // default: no delta this frame
@@ -143,6 +143,21 @@ export class SlamCore {
         const currMat = cv.matFromArray(nPose, 2, cv.CV_64F, goodCurrPose);
         // For LK state into the next frame, preserve the typical Nx1 CV_32FC2 format
         let currMatFlow = cv.matFromArray(nGoodAll, 1, cv.CV_32FC2, goodCurrAll);
+
+        // Feature tracking is done. When the marker is visible and providing pose every
+        // frame, skip the expensive essential-matrix + recoverPose computation.
+        // SLAM keeps its LK state warm so it can take over immediately when the marker is lost.
+        if (skipPoseRecovery) {
+            this.lastDelta = null;
+            prevMat.delete();
+            currMat.delete();
+            if (this.prevPoints) this.prevPoints.delete();
+            const tmp = this.prevGray;
+            this.prevGray = this.currGray;
+            this.currGray = tmp;
+            this.prevPoints = currMatFlow; // transfer ownership; do NOT delete currMatFlow
+            return { pose: this.pose, mapPoints: this.mapPoints, mapPoints3D: [], delta: null };
+        }
 
         const fx = this.intrinsics?.fx ?? 600;
         const fy = this.intrinsics?.fy ?? 600;

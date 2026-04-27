@@ -664,37 +664,27 @@ window.addEventListener('load', () => {
     frameIndex++;
 
     const cv = cvInstance;
-    const grabbed = camera.grabFrame();
-    if (!grabbed || !grabbed.imageData) {
+    // Use the dedicated proc canvas (video-native resolution, no DPR scaling).
+    // On a device with 3x DPR the display canvas is ~9x larger than the video;
+    // using the proc canvas makes every OpenCV op proportionally faster.
+    const grabbed = camera.grabProcFrame();
+    if (!grabbed) {
       requestAnimationFrame(loop);
       return;
     }
     const frame = grabbed.imageData;
-    const drawRectForFrame = grabbed.drawRect;
-    const frameDpr = grabbed.dpr || 1;
+    const procWidth = grabbed.procWidth;
+    const procHeight = grabbed.procHeight;
 
     function procPointToVideo(p) {
-      // p is in backing-buffer pixels (ImageData space). drawRect is in CSS pixels.
-      if (!drawRectForFrame) return { x: p.x, y: p.y };
+      // p is in proc-canvas coords (video-native, no letterboxing).
+      // Normalise to [0,1] then map to video pixel coords used by initPose/estimatePose.
+      const u = p.x / procWidth;
+      const v = p.y / procHeight;
 
-      const xCss = p.x / frameDpr;
-      const yCss = p.y / frameDpr;
-
-      const xInVideoCss = xCss - drawRectForFrame.offsetX;
-      const yInVideoCss = yCss - drawRectForFrame.offsetY;
-
-      const u = xInVideoCss / drawRectForFrame.drawWidth;
-      const v = yInVideoCss / drawRectForFrame.drawHeight;
-
-      // IMPORTANT: do not clamp marker corners to the frame border.
-      // Clamping makes corners "stick" to the edge, which pushes the pose (and the model)
-      // toward the edge and can leave it stuck there.
       const oobMargin = 0.02;
       if (u < -oobMargin || u > 1 + oobMargin || v < -oobMargin || v > 1 + oobMargin) return null;
 
-      // Even when points are technically in-bounds, LK/Homography gets unstable near the crop boundary.
-      // When SLAM is available, we prefer to stop applying marker pose updates near the edge so the
-      // house stays fixed in the world and can naturally leave the camera frustum.
       const edgeGuard = 0.12;
       const nearEdge = (u < edgeGuard || u > 1 - edgeGuard || v < edgeGuard || v > 1 - edgeGuard);
 
@@ -709,9 +699,13 @@ window.addEventListener('load', () => {
     let slamDelta = null;
     // True when the marker provided an accepted pose this frame; SLAM only runs as fallback.
     let markerVisibleThisFrame = false;
+    // When the marker is actively LK-tracked, skip essential-matrix + recoverPose in SLAM.
+    // SLAM still runs LK feature tracking so it stays warm and can take over immediately
+    // when the marker leaves frame.
+    const skipSlamPose = markerTracking && lastHadMarker;
     try {
       if (slam) {
-        const res = slam.processFrame(frame);
+        const res = slam.processFrame(frame, skipSlamPose);
         slamDelta = res?.delta || null;
       }
     } catch (err) {
@@ -960,7 +954,15 @@ window.addEventListener('load', () => {
     // marker is visible, and lets SLAM maintain pose smoothly when the marker is out of view.
     if (!markerVisibleThisFrame && cameraSeededFromMarker && slamDelta?.R && slamDelta?.t) {
       const scale = slamMetricScale > 0 ? slamMetricScale : 0.01;
-      renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
+      // Clamp large deltas — noisy essential-matrix output can teleport the camera,
+      // moving world origin (the house) out of the camera frustum and making it "despawn".
+      const dt = slamDelta.t;
+      const deltaMag = Math.sqrt(dt[0]*dt[0] + dt[1]*dt[1] + dt[2]*dt[2]) * scale;
+      if (deltaMag < 0.10) {
+        renderer.applySlamDelta(slamDelta.R, slamDelta.t, scale);
+      } else {
+        logEvery(15, '[SLAM] delta clamped, mag=', deltaMag.toFixed(3) + 'm');
+      }
     }
 
     // Occasional pose debug
