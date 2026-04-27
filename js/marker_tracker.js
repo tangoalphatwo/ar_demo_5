@@ -138,7 +138,7 @@ export class MarkerTracker {
     }
     matches.delete?.();
 
-    if (good.length < 15) {
+    if (good.length < 12) {
       for (const gm of good) gm.delete?.();
       frameKeypoints.delete();
       frameDescriptors.delete();

@@ -720,7 +720,7 @@ window.addEventListener('load', () => {
       const oobMargin = 0.02;
       if (u < -oobMargin || u > 1 + oobMargin || v < -oobMargin || v > 1 + oobMargin) return null;
 
-      const edgeGuard = 0.12;
+      const edgeGuard = 0.08;
       const nearEdge = (u < edgeGuard || u > 1 - edgeGuard || v < edgeGuard || v > 1 - edgeGuard);
 
       return {
@@ -847,6 +847,7 @@ window.addEventListener('load', () => {
             } else {
               // Back off a bit when detection fails (common during fast motion / blur)
               markerDetectCountdown = MARKER_DETECT_EVERY_N_FRAMES - 1;
+              logEvery(30, '[ORB] no detection (null or bad corners)');
               det?.homography?.delete?.();
             }
           }
@@ -878,10 +879,13 @@ window.addEventListener('load', () => {
             markerPrevPts = null;
 
             cornersProc = null;
-          } else if (markerNearEdge && slam) {
-            // Marker is still technically visible, but near the crop boundary.
-            // Stop applying PnP updates so the content doesn't get pulled toward the screen edge.
+          } else if (markerNearEdge && slam && cameraSeededFromMarker) {
+            // Marker is near the crop boundary and world is already anchored — skip PnP
+            // to avoid pulling the content toward the screen edge during tracking.
+            // We intentionally allow near-edge detection BEFORE world is seeded so the
+            // house can still spawn when the user first points at the QR code off-centre.
             cornersProc = null;
+            logEvery(15, '[Marker] near-edge suppressed (already seeded)');
           } else {
             const imagePtsScaled = imagePtsScaledFull.map(({ x, y }) => ({ x, y }));
 
