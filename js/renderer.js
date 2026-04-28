@@ -28,8 +28,9 @@ export class ARRenderer {
     this.bgMesh = null;
 
     // --- World zero + content roots ---
-    // In this demo, we keep the Three.js camera fixed and move the world root
-    // (because solvePnP yields marker->camera). Treat this root as "world zero".
+    // Camera-tracked architecture: the camera moves through a fixed world.
+    // solvePnP yields marker→camera; we invert to get camera→world and drive
+    // this.camera directly. worldZeroRoot stays at the world origin (0,0,0).
     this.worldZeroRoot = new THREE.Group();
     this.worldZeroRoot.name = 'WorldZeroRoot';
     this.worldZeroRoot.visible = false;
@@ -130,9 +131,10 @@ export class ARRenderer {
     this.camera.updateProjectionMatrix();
   }
 
-  // Save the current tracking frame as "world zero".
-  // NOTE: In a camera-tracked pipeline this would store camera.matrixWorld.
-  // In this demo, the camera is fixed and worldZeroRoot moves, so we store worldZeroRoot.matrixWorld.
+  // Mark the current frame as "world zero".
+  // In camera-tracked mode worldZeroRoot is always at the origin (identity matrix),
+  // so the snapshot is always identity. placeHouseAtCurrentWorldPose therefore works
+  // directly in world space, which is the correct behaviour.
   setWorldZero() {
     this.worldZeroRoot.updateMatrixWorld(true);
 
@@ -212,74 +214,38 @@ export class ARRenderer {
     return { x: size.x, y: size.y, z: size.z };
   }
 
-  setAnchorPose(pose) {
-    if (!pose || !pose.position || !pose.rotationMatrix) {
-      this.worldZeroRoot.visible = false;
-      return;
-    }
-
-    // pose.rotationMatrix is row-major 3x3 from OpenCV
-    const r = pose.rotationMatrix;
-
-    // Convert OpenCV camera coords (x right, y down, z forward)
-    // to Three camera coords (x right, y up, z backward): S = diag(1,-1,-1)
-    const r00 = r[0], r01 = r[1], r02 = r[2];
-    const r10 = r[3], r11 = r[4], r12 = r[5];
-    const r20 = r[6], r21 = r[7], r22 = r[8];
-
-    const Rthree = new THREE.Matrix4();
-    Rthree.set(
-      r00, -r01, -r02, 0,
-      -r10, r11, r12, 0,
-      -r20, r21, r22, 0,
-      0, 0, 0, 1
-    );
-
-    const q = new THREE.Quaternion();
-    q.setFromRotationMatrix(Rthree);
-
-    this.worldZeroRoot.position.set(
-      pose.position.x,
-      pose.position.y,
-      -pose.position.z
-    );
-    this.worldZeroRoot.quaternion.copy(q);
-    this.worldZeroRoot.visible = true;
-  }
-
-  // Preferred AR path: treat the marker as world origin and move the camera.
-  // pose is marker->camera (OpenCV solvePnP), so camera->world is its inverse.
+  // Treat the marker as the world origin and drive the camera.
+  // pose is marker→camera (OpenCV solvePnP output).
+  // We build Tcw (marker→camera in Three.js coords) directly, invert it to
+  // get Twc (camera→world), and apply it to this.camera.
+  // worldZeroRoot stays at the world origin (0,0,0) the whole time.
   setCameraFromMarkerPose(pose) {
     if (!pose || !pose.position || !pose.rotationMatrix) {
       this.worldZeroRoot.visible = false;
       return;
     }
 
-    // Principle: build the marker->camera transform using the *same* coordinate conversion as setAnchorPose
-    // (known-good), then invert it to get camera->world.
+    // pose.rotationMatrix is a row-major 3×3 from OpenCV (x right, y down, z forward).
+    // Convert to Three.js coords (x right, y up, z backward) via S = diag(1,−1,−1):
+    //   R_three = S · R_cv · S
+    // pose.position has already had y negated by pose.js normalizeTranslation,
+    // so only z needs negating here.
     const r = pose.rotationMatrix;
-
     const r00 = r[0], r01 = r[1], r02 = r[2];
     const r10 = r[3], r11 = r[4], r12 = r[5];
     const r20 = r[6], r21 = r[7], r22 = r[8];
 
-    const Rthree = new THREE.Matrix4();
-    Rthree.set(
-      r00, -r01, -r02, 0,
-      -r10, r11, r12, 0,
-      -r20, r21, r22, 0,
-      0, 0, 0, 1
+    // Build Tcw (marker→camera) directly — no scene-object manipulation needed.
+    const Tcw = new THREE.Matrix4();
+    Tcw.set(
+       r00, -r01, -r02,  pose.position.x,
+      -r10,  r11,  r12,  pose.position.y,
+      -r20,  r21,  r22, -pose.position.z,
+         0,    0,    0,  1
     );
 
-    const q = new THREE.Quaternion();
-    q.setFromRotationMatrix(Rthree);
-
-    // Temporarily treat worldZeroRoot as Tcw (marker/world -> camera)
-    this.worldZeroRoot.position.set(pose.position.x, pose.position.y, -pose.position.z);
-    this.worldZeroRoot.quaternion.copy(q);
-    this.worldZeroRoot.updateMatrixWorld(true);
-
-    const Twc = this.worldZeroRoot.matrixWorld.clone().invert();
+    // Invert to get Twc (camera→world) and apply to camera.
+    const Twc = Tcw.clone().invert();
 
     this.camera.matrixAutoUpdate = false;
     this.camera.matrix.copy(Twc);
@@ -287,10 +253,6 @@ export class ARRenderer {
     this.camera.matrixWorldNeedsUpdate = true;
     this.camera.updateMatrixWorld(true);
 
-    // Keep world root fixed at origin in camera-tracked mode
-    this.worldZeroRoot.position.set(0, 0, 0);
-    this.worldZeroRoot.quaternion.set(0, 0, 0, 1);
-    this.worldZeroRoot.updateMatrixWorld(true);
     this.worldZeroRoot.visible = true;
   }
 
@@ -331,39 +293,6 @@ export class ARRenderer {
     this.worldZeroRoot.position.set(0, 0, 0);
     this.worldZeroRoot.quaternion.set(0, 0, 0, 1);
     this.worldZeroRoot.visible = true;
-  }
-
-  // Alternate persistence path: keep the camera fixed and update the anchored content
-  // directly using the per-frame SLAM delta (camera1->camera2): X2 = R*X1 + t.
-  // If anchor represents object->camera transform in the current camera frame, then
-  // T_c2_o = T21 * T_c1_o.
-  applySlamDeltaToAnchor(deltaR, deltaT, scale = 1.0) {
-    if (!deltaR || !deltaT) return;
-    if (!this.worldZeroRoot.visible) return;
-
-    const r00 = deltaR[0], r01 = deltaR[1], r02 = deltaR[2];
-    const r10 = deltaR[3], r11 = deltaR[4], r12 = deltaR[5];
-    const r20 = deltaR[6], r21 = deltaR[7], r22 = deltaR[8];
-
-    const t = new THREE.Vector3(
-      deltaT[0] * scale,
-      -deltaT[1] * scale,
-      -deltaT[2] * scale
-    );
-
-    const T21 = new THREE.Matrix4();
-    T21.set(
-      r00, -r01, -r02, t.x,
-      -r10, r11, r12, t.y,
-      -r20, r21, r22, t.z,
-      0, 0, 0, 1
-    );
-
-    // Ensure worldZeroRoot.matrix matches position/quaternion before applying.
-    this.worldZeroRoot.updateMatrix();
-    this.worldZeroRoot.matrix.premultiply(T21);
-    this.worldZeroRoot.matrix.decompose(this.worldZeroRoot.position, this.worldZeroRoot.quaternion, this.worldZeroRoot.scale);
-    this.worldZeroRoot.updateMatrixWorld(true);
   }
 
   render() {
