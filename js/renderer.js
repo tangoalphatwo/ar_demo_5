@@ -43,83 +43,7 @@ export class ARRenderer {
     // Back-compat: existing code references renderer.anchor
     this.anchor = this.worldZeroRoot;
 
-    // Persisted world-zero / house state
-    this.worldZeroState = {
-      isSet: false,
-      worldZeroMatrixAtZero: new THREE.Matrix4(),
-      worldZeroMatrixAtZeroInverse: new THREE.Matrix4()
-    };
-
     this.model = null;
-  }
-
-  // --- Persistence helpers ---
-  saveWorldZero() {
-    try {
-      localStorage.setItem(
-        'ar_world_zero',
-        JSON.stringify({
-          isSet: this.worldZeroState.isSet,
-          worldZeroMatrixAtZero: this.worldZeroState.worldZeroMatrixAtZero.toArray()
-        })
-      );
-    } catch {
-      // ignore storage failures
-    }
-  }
-
-  loadWorldZero() {
-    try {
-      const raw = localStorage.getItem('ar_world_zero');
-      if (!raw) return false;
-
-      const data = JSON.parse(raw);
-      if (!data?.isSet || !Array.isArray(data?.worldZeroMatrixAtZero)) return false;
-
-      this.worldZeroState.isSet = true;
-      this.worldZeroState.worldZeroMatrixAtZero.fromArray(data.worldZeroMatrixAtZero);
-      this.worldZeroState.worldZeroMatrixAtZeroInverse
-        .copy(this.worldZeroState.worldZeroMatrixAtZero)
-        .invert();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  saveHousePose() {
-    try {
-      // Ensure matrix is current
-      this.houseRoot.updateMatrix();
-      localStorage.setItem(
-        'ar_house_pose',
-        JSON.stringify({ matrix: this.houseRoot.matrix.toArray() })
-      );
-    } catch {
-      // ignore storage failures
-    }
-  }
-
-  loadHousePose() {
-    try {
-      const raw = localStorage.getItem('ar_house_pose');
-      if (!raw) return false;
-      const data = JSON.parse(raw);
-      if (!Array.isArray(data?.matrix)) return false;
-
-      this.houseRoot.matrixAutoUpdate = false;
-      this.houseRoot.matrix.fromArray(data.matrix);
-      this.houseRoot.matrix.decompose(this.houseRoot.position, this.houseRoot.quaternion, this.houseRoot.scale);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  restorePersistedHouse() {
-    const wz = this.loadWorldZero();
-    const hp = this.loadHousePose();
-    return { worldZeroLoaded: wz, housePoseLoaded: hp };
   }
 
   // Match the Three.js camera projection to the real camera's intrinsics.
@@ -129,48 +53,6 @@ export class ARRenderer {
     // Vertical FOV: 2 * atan(half_image_height_px / focal_length_y_px)
     this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(cy / fy));
     this.camera.updateProjectionMatrix();
-  }
-
-  // Mark the current frame as "world zero".
-  // In camera-tracked mode worldZeroRoot is always at the origin (identity matrix),
-  // so the snapshot is always identity. placeHouseAtCurrentWorldPose therefore works
-  // directly in world space, which is the correct behaviour.
-  setWorldZero() {
-    this.worldZeroRoot.updateMatrixWorld(true);
-
-    this.worldZeroState.worldZeroMatrixAtZero.copy(this.worldZeroRoot.matrixWorld);
-    this.worldZeroState.worldZeroMatrixAtZeroInverse.copy(this.worldZeroRoot.matrixWorld).invert();
-    this.worldZeroState.isSet = true;
-
-    this.saveWorldZero();
-  }
-
-  placeHouseAtCurrentWorldPose(worldMatrix) {
-    if (!this.worldZeroState.isSet) return;
-    if (!worldMatrix) return;
-
-    const localToWorldZero = new THREE.Matrix4()
-      .copy(this.worldZeroState.worldZeroMatrixAtZeroInverse)
-      .multiply(worldMatrix);
-
-    this.houseRoot.matrixAutoUpdate = false;
-    this.houseRoot.matrix.copy(localToWorldZero);
-    this.houseRoot.matrix.decompose(this.houseRoot.position, this.houseRoot.quaternion, this.houseRoot.scale);
-
-    this.saveHousePose();
-  }
-
-  placeHouseFromCameraRelativePose(cameraRelativeMatrix) {
-    if (!this.worldZeroState.isSet) return;
-    if (!cameraRelativeMatrix) return;
-
-    this.camera.updateMatrixWorld(true);
-
-    const worldMatrix = new THREE.Matrix4()
-      .copy(this.camera.matrixWorld)
-      .multiply(cameraRelativeMatrix);
-
-    this.placeHouseAtCurrentWorldPose(worldMatrix);
   }
 
   setVideoTexture(video) {

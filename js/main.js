@@ -12,22 +12,10 @@ window.addEventListener('load', () => {
   const startBtn = document.getElementById('startBtn');
   const statusEl = document.getElementById('status');
   const debugToggle = document.getElementById('debugToggle');
-  const setWorldZeroBtn = document.getElementById('setWorldZeroBtn');
   const debugInfo = document.getElementById('debugInfo');
 
   const camera = new CameraManager(videoEl, cvCanvas);
   const renderer = new ARRenderer(threeCanvas);
-
-  // Restore persisted world-zero + house pose as early as possible.
-  // (Content remains hidden until the marker/world root becomes visible.)
-  try {
-    const restored = renderer.restorePersistedHouse?.();
-    if (restored?.worldZeroLoaded || restored?.housePoseLoaded) {
-      console.log('[Persist] restored', restored);
-    }
-  } catch (e) {
-    console.warn('[Persist] restore failed:', e);
-  }
 
   let debugFeaturePoints = [];
   let showDebug = false;
@@ -61,22 +49,6 @@ window.addEventListener('load', () => {
       toastEl.setAttribute('aria-hidden', 'true');
       toastTimer = setTimeout(() => { toastEl.hidden = true; toastTimer = null; }, 180);
     }, duration);
-  }
-
-  if (setWorldZeroBtn) {
-    setWorldZeroBtn.addEventListener('click', () => {
-      try {
-        if (!cameraSeededFromMarker) {
-          showToast('Show marker first');
-          return;
-        }
-        renderer.setWorldZero?.();
-        showToast('World zero reset');
-      } catch (e) {
-        console.warn('[WorldZero] reset failed:', e);
-        showToast('Failed to reset world zero');
-      }
-    });
   }
 
   let running = false;
@@ -559,9 +531,6 @@ window.addEventListener('load', () => {
         debugToggle.setAttribute('aria-pressed', 'false');
         debugToggle.textContent = 'Show Debug';
       }
-      if (setWorldZeroBtn) {
-        setWorldZeroBtn.hidden = false;
-      }
       if (debugInfo) {
         debugInfo.hidden = true;
         debugInfo.setAttribute('aria-hidden', 'true');
@@ -914,7 +883,6 @@ window.addEventListener('load', () => {
               slamGraceCountdown = 0; // marker is visible — no grace needed
               if (!cameraSeededFromMarker) {
                 cameraSeededFromMarker = true;
-                renderer.setWorldZero(); // auto-anchor world zero on first good detection
                 console.log('[AR] World zero anchored automatically');
               }
               logEvery(30, '[Marker] pose ok', pose.position);
