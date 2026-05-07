@@ -871,8 +871,9 @@ window.addEventListener('load', () => {
 
             const pose = estimatePose(imagePtsScaled, objectPoints, cvInstance);
             const poseOk = poseLooksPlausible(pose);
-            // On reacquire, allow snapping back even if the pose jump is large.
-            const acceptPose = !!pose && poseOk && (justAcquired || !poseJumpTooLarge(lastStableMarkerPose, pose));
+            // PoC: marker is the sole source of truth. Accept every plausible pose so
+            // the model tracks the marker continuously, even on large camera moves.
+            const acceptPose = !!pose && poseOk;
             if (acceptPose) {
               lastStableMarkerPose = pose;
               latestPose = pose;
@@ -955,23 +956,11 @@ window.addEventListener('load', () => {
           // no marker in this frame
           framesSinceMarker++;
 
-          // Without SLAM (camera tracking), we cannot keep a stable world anchor.
-          // Freezing the last pose makes the model look stuck to the screen.
-          if (!slam) {
-            // No SLAM available. Freeze the camera at the last known pose so the
-            // house stays visible (it will drift on screen as the user moves, but
-            // won't instantly disappear). Execution falls through to renderer.render().
-            if (!cameraSeededFromMarker) renderer.setCameraFromMarkerPose(null);
-            if (lastHadMarker) console.log('[Marker] lost');
-            lastHadMarker = false;
-          }
+          // PoC: marker is the sole pose source. Hide the model whenever the marker
+          // is not visible so it never appears stuck to the screen or floating in space.
+          renderer.setCameraFromMarkerPose(null);
 
-          // SLAM will be applied below as a fallback when marker is not visible this frame.
-
-          if (lastHadMarker) {
-            console.log('[Marker] lost');
-            slamGraceCountdown = SLAM_GRACE_FRAMES;
-          }
+          if (lastHadMarker) console.log('[Marker] lost');
           lastHadMarker = false;
         }
       }
@@ -979,10 +968,11 @@ window.addEventListener('load', () => {
       console.warn('Marker pose error:', e);
     }
 
-    // SLAM fallback: only drive the camera when the marker is not providing a pose this frame.
-    // Keeping marker as the primary source prevents SLAM drift from accumulating while the
-    // marker is visible, and lets SLAM maintain pose smoothly when the marker is out of view.
-    if (!markerVisibleThisFrame && cameraSeededFromMarker && slamDelta?.R && slamDelta?.t) {
+    // SLAM fallback is intentionally disabled for this PoC. The marker is the only
+    // pose source: when it's visible the camera is driven from solvePnP; when it's
+    // not, setCameraFromMarkerPose(null) hides the model. This avoids the noisy
+    // recoverPose teleports that previously made the house "fly off" or despawn.
+    if (false && !markerVisibleThisFrame && cameraSeededFromMarker && slamDelta?.R && slamDelta?.t) {
       if (slamGraceCountdown > 0) {
         // Marker was just lost — hold the camera frozen for a few frames so brief
         // occlusions don't kick off noisy SLAM motion immediately.
